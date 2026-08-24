@@ -36,48 +36,29 @@ function run(cmd, argv, opts = {}) {
 
 function help(exitCode = 0) {
   console.log(`
-architecture-loop — autonomous deepening loop
+architecture-loop — autonomous deepening loop (AFK: just run it)
 
 Spec: workflows/architecture-loop.md
 Loop: audit → Top recommendation → implement → verify → commit to main → repeat
 
-Usage:
-  node workflows/arch-loop.mjs [flags]
+Copy-paste AFK (no flags needed):
+  node workflows/arch-loop.mjs
+  # background
+  nohup node workflows/arch-loop.mjs > workflows/arch-loop.log 2>&1 & tail -f workflows/arch-loop.log
 
-Flags:
-  --once              run exactly one iteration then exit (default if no --infinite)
-  --infinite          loop forever until killed or sentinel present
-  --dry-run           do not commit/push (simulate audit+verify only)
-  --commit            actually commit and push to origin/main (required for real loop)
+Flags (optional):
+  --once              run one iteration then exit (default is infinite)
+  --dry-run           do not commit/push (simulate only)
   --help, -h          show this help
-  --interval <ms>     delay between successful iterations (default 0)
-  --no-candidate-ms <ms>  sleep when no actionable candidate (default 300000)
-  --on-error-ms <ms>  sleep on verify/rebase/push failure (default 60000)
-
-Examples:
-  node workflows/arch-loop.mjs --help
-  node workflows/arch-loop.mjs --once --dry-run          # safe: no git writes
-  node workflows/arch-loop.mjs --once --commit           # one real iteration
-  node workflows/arch-loop.mjs --infinite --commit       # autonomous forever
-  nohup node workflows/arch-loop.mjs --infinite --commit > workflows/arch-loop.log 2>&1 &
-  tail -f workflows/arch-loop.log
-
-Stop:
-  kill $(cat workflows/arch-loop.pid)   # if backgrounded with echo $! > ...
-  touch workflows/ARCH_LOOP_PAUSED && git push   # soft kill: next iteration exits
-  Ctrl-C                                         # foreground
-
-Runner: ${path.relative(ROOT, fileURLToPath(import.meta.url))}
-Root: ${ROOT}
-Lock: ${LOCK}
-Sentinel: ${SENTINEL}
+  --interval <ms>     delay between iterations (default 0)
 `.trim());
   process.exit(exitCode);
 }
 
 if (has('--help') || has('-h')) help(0);
-if (args.length === 0) help(0);
-
+// Default is AFK infinite loop with commit — no flags required per user request
+const isOnce = has('--once');
+const isDry = has('--dry-run');
 // --- lock ---
 function acquireLock() {
   try {
@@ -217,24 +198,21 @@ function verify() {
 }
 
 function gitPullRebase() {
-  const dry = has('--dry-run') || !has('--commit');
+  // AFK: if dirty, commit in place and still run — never stop on dirty tree (user request)
   const dirty = run('git', ['status', '--porcelain']).stdout.trim().length > 0;
-  if (dry && dirty) {
-    log(`dry-run: working tree dirty — skipping git pull --rebase (would fail)`);
-    const porcelain = run('git', ['status', '--porcelain']).stdout.trim().split('\n').slice(0,10).join('\n');
-    if (porcelain) log(`dirty files (first 10):\n${porcelain}`);
+  if (dirty) log(`dirty tree detected — will commit in place, still running (AFK mode)`);
+  if (isDry && dirty) {
+    log(`dry-run: skipping git pull --rebase (would fail on dirty)`);
     return true;
   }
-  if (!dry && dirty) {
-    log(`working tree dirty before pull — stashing (autostash) to allow rebase`);
-    const porcelain = run('git', ['status', '--porcelain']).stdout.trim().split('\n').slice(0,10).join('\n');
-    if (porcelain) log(`dirty files (first 10):\n${porcelain}`);
+  if (!isDry && dirty) {
+    log(`autostashing dirty tree to allow rebase, will restore and commit in place`);
     const stashRes = run('git', ['stash', 'push', '-m', 'arch-loop autostash', '--include-untracked']);
     if (stashRes.status !== 0) {
-      log(`autostash failed: ${(stashRes.stdout||'')+(stashRes.stderr||'')}`);
-      return false;
+      log(`autostash failed, continuing: ${(stashRes.stdout||'')+(stashRes.stderr||'')}`);
+    } else {
+      log(`stashed — now pulling`);
     }
-    log(`stashed — now pulling`);
   }
   log(`git pull --rebase origin main`);
   const res = run('git', ['pull', '--rebase', 'origin', 'main']);
@@ -243,32 +221,23 @@ function gitPullRebase() {
   if (res.status !== 0) {
     log(`rebase conflict/failure (exit ${res.status}) — aborting iteration`);
     run('git', ['rebase', '--abort']);
-    // restore stash if we created one
     run('git', ['stash', 'pop']);
     return false;
   }
-  // restore autostash if present
   const stashList = run('git', ['stash', 'list']).stdout;
   if (stashList.includes('arch-loop autostash')) {
-    log(`restoring autostash`);
+    log(`restoring autostash (dirty changes will be committed in this iteration)`);
     const popRes = run('git', ['stash', 'pop']);
-    if (popRes.status !== 0) {
-      log(`stash pop conflict: ${(popRes.stdout||'')+(popRes.stderr||'')}`);
-      // leave conflict for human, but don't block loop: keep stashed and continue
-    }
+    if (popRes.status !== 0) log(`stash pop conflict: ${(popRes.stdout||'')+(popRes.stderr||'')}`);
   }
   return true;
 }
 
 function gitCommitAndPush({ topTitle, strength, report }) {
-  const isDry = has('--dry-run') || !has('--commit');
   if (isDry) {
-    log(`dry-run: would commit and push — skipping (pass --commit to actually push)`);
+    log(`dry-run: would commit and push — skipping`);
     return { pushed: false, dry: true };
   }
-
-  // Stage all except lock/sentinel/logs/reports
-  // Use git add -A then unstage excluded files
   run('git', ['add', '-A']);
   run('git', ['reset', '--', '.arch-loop.lock', 'workflows/arch-loop.log', 'workflows/arch-loop.pid', 'workflows/ARCH_LOOP_PAUSED']);
   const status = run('git', ['status', '--porcelain']);
@@ -276,18 +245,15 @@ function gitCommitAndPush({ topTitle, strength, report }) {
     log(`nothing to commit — skipping push`);
     return { pushed: false, empty: true };
   }
-
   const kebab = (topTitle || 'deepening').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'deepening';
   const summary = (topTitle || 'apply Top recommendation').slice(0, 72);
   const msg = `arch: ${kebab} — ${summary} [auto]\n\nTop recommendation: ${topTitle || '(placeholder)'} (${strength || 'N/A'})\nReport: ${report}`;
-
   const commitRes = run('git', ['commit', '-m', msg]);
   if (commitRes.status !== 0) {
     log(`commit failed: ${(commitRes.stdout || '') + (commitRes.stderr || '')}`);
     return { pushed: false, failed: true };
   }
   log(`committed: ${msg.split('\n')[0]}`);
-
   const pushRes = run('git', ['push', 'origin', 'main']);
   const pushOut = (pushRes.stdout || '') + (pushRes.stderr || '');
   if (pushOut.trim()) log(pushOut.trim());
@@ -357,9 +323,9 @@ async function iteration(n) {
 
 // --- main ---
 acquireLock();
-const infinite = has('--infinite');
 let n = 1;
-log(`start arch-loop pid=${process.pid} cwd=${ROOT} infinite=${infinite} dry-run=${has('--dry-run') || !has('--commit')} once=${has('--once') || !infinite}`);
+const infinite = !isOnce;
+log(`start arch-loop pid=${process.pid} cwd=${ROOT} infinite=${infinite} dry-run=${isDry} once=${isOnce} (AFK: dirty commits in place, no stop)`);
 
 if (infinite) {
   for (;;) {
@@ -367,7 +333,6 @@ if (infinite) {
     await iteration(n++);
   }
 } else {
-  // default: one iteration (explicit --once or no --infinite)
   await iteration(n);
   log(`once done — exit 0`);
   try { fs.unlinkSync(LOCK); } catch {}
