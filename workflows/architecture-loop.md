@@ -173,3 +173,4 @@ Reply `✅ as assumed` or name amendments (e.g., `Q2: placeholder not heuristic`
 - `skill://codebase-design` (Module/Interface/Seam/Depth/Leverage/Locality, deletion test, seam discipline)
 - `skill://grilling` (frontier discipline used to reach this spec)
 - `NOTES.md` (canonical terms), `AGENTS.md` (surgical-change bias), `README.md` (verify contract)
+modify

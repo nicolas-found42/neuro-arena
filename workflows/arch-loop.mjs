@@ -206,12 +206,14 @@ function gitPullRebase() {
     return true;
   }
   if (!isDry && dirty) {
-    log(`autostashing dirty tree to allow rebase, will restore and commit in place`);
-    const stashRes = run('git', ['stash', 'push', '-m', 'arch-loop autostash', '--include-untracked']);
+    log(`autostashing tracked changes to allow rebase (untracked files stay, will be committed in place)`);
+    const stashRes = run('git', ['stash', 'push', '-m', 'arch-loop autostash']);
     if (stashRes.status !== 0) {
       log(`autostash failed, continuing: ${(stashRes.stdout||'')+(stashRes.stderr||'')}`);
     } else {
-      log(`stashed — now pulling`);
+      const hasStash = run('git', ['stash', 'list']).stdout.includes('arch-loop autostash');
+      if (hasStash) log(`stashed tracked changes — now pulling`);
+      else log(`nothing to stash (only untracked) — now pulling`);
     }
   }
   log(`git pull --rebase origin main`);
@@ -226,7 +228,7 @@ function gitPullRebase() {
   }
   const stashList = run('git', ['stash', 'list']).stdout;
   if (stashList.includes('arch-loop autostash')) {
-    log(`restoring autostash (dirty changes will be committed in this iteration)`);
+    log(`restoring autostash (dirty tracked changes will be committed in this iteration)`);
     const popRes = run('git', ['stash', 'pop']);
     if (popRes.status !== 0) log(`stash pop conflict: ${(popRes.stdout||'')+(popRes.stderr||'')}`);
   }
