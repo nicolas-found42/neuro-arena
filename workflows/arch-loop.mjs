@@ -211,8 +211,12 @@ function gitPullRebase() {
     const s = run('git', ['status', '--porcelain']).stdout.trim();
     if (s) {
       const c = run('git', ['commit', '-m', 'arch: wip — dirty checkpoint [auto]']);
-      if (c.status === 0) log(`committed dirty checkpoint`);
-      else log(`dirty commit failed: ${(c.stdout||'')+(c.stderr||'')}`);
+      if (c.status === 0) {
+        log(`committed dirty checkpoint`);
+        const pushRes = run('git', ['push', 'origin', 'main']);
+        if (pushRes.status === 0) log(`pushed dirty checkpoint`);
+        else log(`push dirty checkpoint failed: ${(pushRes.stdout||'')+(pushRes.stderr||'')}`);
+      } else log(`dirty commit failed: ${(c.stdout||'')+(c.stderr||'')}`);
     } else {
       log(`nothing to commit after add/reset (only excluded files)`);
     }
