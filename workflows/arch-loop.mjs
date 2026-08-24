@@ -205,18 +205,14 @@ function gitPullRebase() {
     return true;
   }
   if (!isDry && dirty) {
-    log(`dirty: committing in place before pull`);
+    log(`dirty: committing in place before pull (single push at end of iteration)`);
     run('git', ['add', '-A']);
     run('git', ['reset', '--', '.arch-loop.lock', 'workflows/arch-loop.log', 'workflows/arch-loop.pid', 'workflows/ARCH_LOOP_PAUSED']);
     const s = run('git', ['status', '--porcelain']).stdout.trim();
     if (s) {
       const c = run('git', ['commit', '-m', 'arch: wip — dirty checkpoint [auto]']);
-      if (c.status === 0) {
-        log(`committed dirty checkpoint`);
-        const pushRes = run('git', ['push', 'origin', 'main']);
-        if (pushRes.status === 0) log(`pushed dirty checkpoint`);
-        else log(`push dirty checkpoint failed: ${(pushRes.stdout||'')+(pushRes.stderr||'')}`);
-      } else log(`dirty commit failed: ${(c.stdout||'')+(c.stderr||'')}`);
+      if (c.status === 0) log(`committed dirty checkpoint (will be pushed with Top commit at end)`);
+      else log(`dirty commit failed: ${(c.stdout||'')+(c.stderr||'')}`);
     } else {
       log(`nothing to commit after add/reset (only excluded files)`);
     }
@@ -242,6 +238,20 @@ function gitCommitAndPush({ topTitle, strength, report }) {
   run('git', ['reset', '--', '.arch-loop.lock', 'workflows/arch-loop.log', 'workflows/arch-loop.pid', 'workflows/ARCH_LOOP_PAUSED']);
   const status = run('git', ['status', '--porcelain']);
   if (!status.stdout.trim()) {
+    const ahead = run('git', ['rev-list', '--count', 'origin/main..HEAD']).stdout.trim();
+    if (ahead && ahead !== '0') {
+      log(`nothing new for Top but ${ahead} commit(s) ahead (wip) — pushing`);
+      const pushRes = run('git', ['push', 'origin', 'main']);
+      const pushOut = (pushRes.stdout || '') + (pushRes.stderr || '');
+      if (pushOut.trim()) log(pushOut.trim());
+      if (pushRes.status !== 0) {
+        log(`push rejected (exit ${pushRes.status})`);
+        return { pushed: false, failed: true };
+      }
+      const shaRes = run('git', ['rev-parse', 'HEAD']);
+      log(`pushed ${shaRes.stdout.trim()}`);
+      return { pushed: true, sha: shaRes.stdout.trim() };
+    }
     log(`nothing to commit — skipping push`);
     return { pushed: false, empty: true };
   }
