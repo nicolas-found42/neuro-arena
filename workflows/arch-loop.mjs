@@ -198,22 +198,23 @@ function verify() {
 }
 
 function gitPullRebase() {
-  // AFK: if dirty, commit in place and still run — never stop on dirty tree (user request)
   const dirty = run('git', ['status', '--porcelain']).stdout.trim().length > 0;
-  if (dirty) log(`dirty tree detected — will commit in place, still running (AFK mode)`);
+  if (dirty) log(`dirty tree detected — committing in place per AFK mode (no stop)`);
   if (isDry && dirty) {
     log(`dry-run: skipping git pull --rebase (would fail on dirty)`);
     return true;
   }
   if (!isDry && dirty) {
-    log(`autostashing tracked changes to allow rebase (untracked files stay, will be committed in place)`);
-    const stashRes = run('git', ['stash', 'push', '-m', 'arch-loop autostash']);
-    if (stashRes.status !== 0) {
-      log(`autostash failed, continuing: ${(stashRes.stdout||'')+(stashRes.stderr||'')}`);
+    log(`dirty: committing in place before pull`);
+    run('git', ['add', '-A']);
+    run('git', ['reset', '--', '.arch-loop.lock', 'workflows/arch-loop.log', 'workflows/arch-loop.pid', 'workflows/ARCH_LOOP_PAUSED']);
+    const s = run('git', ['status', '--porcelain']).stdout.trim();
+    if (s) {
+      const c = run('git', ['commit', '-m', 'arch: wip — dirty checkpoint [auto]']);
+      if (c.status === 0) log(`committed dirty checkpoint`);
+      else log(`dirty commit failed: ${(c.stdout||'')+(c.stderr||'')}`);
     } else {
-      const hasStash = run('git', ['stash', 'list']).stdout.includes('arch-loop autostash');
-      if (hasStash) log(`stashed tracked changes — now pulling`);
-      else log(`nothing to stash (only untracked) — now pulling`);
+      log(`nothing to commit after add/reset (only excluded files)`);
     }
   }
   log(`git pull --rebase origin main`);
@@ -221,16 +222,9 @@ function gitPullRebase() {
   const out = (res.stdout || '') + (res.stderr || '');
   if (out.trim()) log(out.trim());
   if (res.status !== 0) {
-    log(`rebase conflict/failure (exit ${res.status}) — aborting iteration`);
+    log(`rebase conflict/failure (exit ${res.status}) — aborting iteration (no stash, no 60s block)`);
     run('git', ['rebase', '--abort']);
-    run('git', ['stash', 'pop']);
     return false;
-  }
-  const stashList = run('git', ['stash', 'list']).stdout;
-  if (stashList.includes('arch-loop autostash')) {
-    log(`restoring autostash (dirty tracked changes will be committed in this iteration)`);
-    const popRes = run('git', ['stash', 'pop']);
-    if (popRes.status !== 0) log(`stash pop conflict: ${(popRes.stdout||'')+(popRes.stderr||'')}`);
   }
   return true;
 }
@@ -273,9 +267,7 @@ async function iteration(n) {
   checkSentinel();
 
   if (!gitPullRebase()) {
-    const ms = Number(get('--on-error-ms', '60000'));
-    log(`sleep ${ms}ms on rebase failure`);
-    await new Promise(r => setTimeout(r, ms));
+    log(`rebase failed — continuing AFK (dirty already committed in place, no 60s block)`);
     return 'retry';
   }
 
