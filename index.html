@@ -8,6 +8,12 @@
 <link rel="stylesheet" href="https://unpkg.com/98.css@0.1.21/dist/98.css">
 <link rel="stylesheet" href="https://unpkg.com/nes.css@2.3.0/css/nes.min.css">
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Press+Start+2P&display=swap" rel="stylesheet">
+<!-- Gated micro-chrome (single <link> each, CORS *, MIT/OFL, keyless, no build) — gz deltas: hint 1.1KB > spinkit 2.1KB > open-props 2.5KB > tabler ~18KB > monaspace ~18KB -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/hint.css/2.7.0/hint.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/spinkit/2.0.1/spinkit.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/open-props@1.7.10/open-props.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/monaspace-neon@5.3.0/index.css">
 <script type="importmap">{"imports":{"roughjs":"https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.esm.js"}}</script>
 <style>
   * { box-sizing: border-box; margin: 0; }
@@ -83,7 +89,6 @@
     color:#fff; padding: 4px 8px; margin: -2px -2px 2px; pointer-events:none; position:relative; z-index:4;
     text-shadow: none; border-bottom: 1px solid #000;
   }
-  body.variant-arcade-sketch #arenaBox::after{ display:none; } /* no CRT here */
   body.variant-arcade-sketch #hud{
     font-family: 'Press Start 2P', 'Space Mono', monospace; font-size: 8px; line-height: 1.6;
     top: 24px; left: 6px; right: 6px; /* below title bar */
@@ -124,6 +129,89 @@
   body.variant-arcade-sketch #speedSlider{ accent-color: #000080; }
   body.variant-arcade-sketch #speedValue{ color:#000080; font-family:'Press Start 2P', monospace; font-size:9px; }
   body.variant-arcade-sketch #speedTicks{ color:#404040; font-family:'Press Start 2P', monospace; font-size:7px; }
+
+  /* ── 0KB CRT phosphor — scanlines + vignette + phosphor (Vector Neon thesis, 30 lines) ── */
+  /* scanlines: repeating-linear-gradient copper bars + vignette radial-gradient via ::after; phosphor via filter */
+  body.variant-arcade-sketch #arenaBox::after{
+    content:""; position:absolute; left:2px; right:2px; top:22px; bottom:2px;
+    pointer-events:none; z-index:3;
+    background:
+      repeating-linear-gradient(0deg, rgba(0,0,0,0.09) 0 2px, transparent 2px 4px),
+      radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(0,0,0,0.42) 100%);
+    mix-blend-mode: multiply;
+    opacity: 0.9;
+  }
+  body.variant-arcade-sketch #arena{
+    filter: contrast(1.05) brightness(1.02);
+  }
+  body.variant-arcade-sketch #hud{
+    text-shadow: 0 0 8px rgba(57,208,255,0.62), 0 1px 0 #000;
+  }
+  /* phosphor chromatic bleed on arenaWrap via subtle text shadow on chrome */
+  #arenaBox{ --phosphor: 0 0 10px rgba(57,208,255,0.35); }
+
+  /* ── Glass + tabular-nums + MONO density (Brutalist Data-Console thesis, 0KB→~3.2KB) ── */
+  #hud, #speedValue, #speedEff, #chart, #net{
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+  /* Monaspace Neon variable as CSS-only fallback after Space Mono (canvas FONT unchanged) */
+  body.variant-arcade-sketch #hud{
+    font-family: 'Space Mono', 'Monaspace Neon', 'Press Start 2P', monospace;
+    font-variation-settings: "MONO" 1;
+    letter-spacing: 0.04em;
+  }
+  /* glass panels with backdrop-filter blur(8px) + solid #0e1320 fallback */
+  body.variant-arcade-sketch #hud{
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  body.variant-arcade-sketch #chart, body.variant-arcade-sketch #net{
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  @supports not (backdrop-filter: blur(8px)){
+    body.variant-arcade-sketch #hud{ background: #0e1320; }
+  }
+  /* conic-gradient fitness donut in HUD (12 lines, no canvas) */
+  .hud-donut{
+    display:inline-block; width:14px; height:14px; border-radius:50%; vertical-align:middle; margin-right:6px;
+    background: conic-gradient(from 270deg, #39d0ff var(--pct), #ffb347 0);
+    /* inner cutout via mask */
+    -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.5px);
+    mask: radial-gradient(circle, transparent 5px, #000 5.5px);
+    border: 1px solid #000;
+    box-shadow: 0 0 6px rgba(57,208,255,0.45);
+  }
+  /* open-props tokens layer composes with 98.css — example token usage without fighting bevel */
+  body.variant-arcade-sketch{ --op-surface: var(--gray-9, #0e1320); }
+
+  /* hint.css tooltips compose with win98 bevel — via aria-label on controls (0KB JS) */
+  .hint--top::after{ font-family: 'Space Mono', monospace; font-size: 10px; }
+
+  /* spinkit busy spinner for speed/HUD (2.1KB) — hidden until data-busy */
+  #speedBox[data-busy="1"] #speedEff::before{
+    content:""; display:inline-block; width:10px; height:10px; margin-right:6px; vertical-align:-1px;
+    border: 1.5px solid #000080; border-top-color: transparent; border-radius:50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg);} }
+  /* spinkit sk-pulse alternative class (if spinkit.css loaded) */
+  .sk-pulse{ width: 12px; height: 12px; background: #000080; border-radius: 100%; display:inline-block; animation: sk-pulse 1s ease-in-out infinite; }
+  @keyframes sk-pulse{ 0%{ transform:scale(0);} 100%{ transform:scale(1); opacity:0;} }
+
+  /* Tabler icons for HUD glyphs (pick one: tabler) — composes with bevel */
+  .ti{ font-family: 'tabler-icons'; speak:none; font-style:normal; font-weight:normal; }
+
+  /* palette constants (Lospec/Open Color, copy-paste hex) — 3 lines per palette swap */
+  :root{
+    --pal-bg: #0b0e14;
+    --pal-crater-hi: rgba(255,255,255,0.09);
+    --pal-crater-lo: rgba(0,0,0,0.32);
+    --pal-best: #39d0ff;
+    --pal-avg: #ffb347;
+  }
 </style>
 </head>
 <body class="variant-arcade-sketch">
@@ -140,19 +228,21 @@
   </div>
 </div>
 <div id="controls">
-  <button id="btnPause">Pause</button>
+  <button id="btnPause" aria-label="Pause / resume evolution (Space)" class="hint--top hint--rounded">Pause</button>
   <div id="speedBox">
     <div id="speedRow">
-      <input id="speedSlider" type="range" min="0" max="4" step="0.01" value="2">
+      <input id="speedSlider" type="range" min="0" max="4" step="0.01" value="2" aria-label="Simulation speed 1× to 10,000×">
       <span id="speedValue">&times;100</span>
       <span id="speedEff"></span>
     </div>
     <div id="speedTicks"><span>1&times;</span><span>10&times;</span><span>100&times;</span><span>1000&times;</span><span>10000&times;</span></div>
   </div>
-  <button id="btnRays">Rays</button>
-  <button id="btnChamp" title="Download the best genome of this run so far">⬇ Champ</button>
-  <button id="btnRestart">&#8635; Restart</button>
+  <button id="btnRays" aria-label="Toggle sensor rays (debug overlay)" class="hint--top hint--rounded">Rays</button>
+  <button id="btnChamp" title="Download the best genome of this run so far" aria-label="Download champion genome JSON" class="hint--top hint--rounded"><i class="ti ti-trophy"></i> ⬇ Champ</button>
+  <button id="btnRestart" aria-label="Restart with same or new seed" class="hint--top hint--rounded">&#8635; Restart</button>
 </div>
 <script type="module" src="js/main.js"></script>
+<!-- Gated JS that composes (single-file CDN, CORS *, MIT/OFL, keyless): noisejs ~3KB sole JS for coherent Perlin on jitter; uPlot ~12KB gated on #chart without touching arena loop -->
+<!-- noisejs: https://cdn.jsdelivr.net/npm/noisejs@2.1.0/index.js (200 *), uPlot: https://cdn.jsdelivr.net/npm/uplot@1.6.5/dist/uPlot.iife.min.js (200 *) + uPlot.min.css -->
 </body>
 </html>
