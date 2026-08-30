@@ -1,11 +1,22 @@
 // Rendering: arena frame (ship under evaluation + its rays/flame), HUD, chart, network panel.
 import { CONFIG } from './config.js';
+import rough from 'roughjs';
+
+// Singleton Rough generator — one instance for the lifetime of the page.
+// Cached drawables per asteroid (asteroid._roughDrawable) mean zero per-frame
+// alloc of Drawable; per-frame `rough.canvas(ctx.canvas).draw(drawable)` reuses
+// the cached object via ctx.save/translate/restore after setupHiDPI transform.
+// GC-safe at ×10000: only one generator, one drawable per asteroid, rc wrapper
+// per frame is transient but tiny. Options match arcade-sketch Target2 bevel:
+// hand-drawn hachure fill on warm grey, thin outline.
+const _roughGen = rough.generator({ roughness: 1.2, bowing: 1 });
 
 const W = CONFIG.arena.width;
 const H = CONFIG.arena.height;
-const FONT = 'ui-monospace, Menlo, Consolas, monospace';
+const FONT = "'Space Mono', 'Press Start 2P', monospace";
 
-// Static starfield, precomputed once.
+// Static starfield, precomputed once. Arcade variant keeps 120 dots, no CRT
+// twinkle or nebula gradient — plain arc+fill stars, GC-free.
 const stars = Array.from({ length: CONFIG.arena.starCount }, () => ({
   x: Math.random() * W,
   y: Math.random() * H,
@@ -47,7 +58,7 @@ export function setupHiDPI(canvas, cssW, cssH, logicalW = cssW, logicalH = cssH)
 
 // Classic Asteroids seam behavior: an entity overlapping an arena edge is drawn
 // again on the opposite side (up to 4 copies when straddling a corner).
-function seamCopies(x, y, r) {
+export function seamCopies(x, y, r) {
   const xs = x - r < 0 ? [0, W] : x + r >= W ? [0, -W] : [0];
   const ys = y - r < 0 ? [0, H] : y + r >= H ? [0, -H] : [0];
   const out = [];
@@ -58,6 +69,14 @@ export function renderArena(ctx, world, shipIdx, showRays) {
   ctx.fillStyle = CONFIG.arena.background;
   ctx.fillRect(0, 0, W, H);
 
+  // Arena inset highlight per prototype Target1 arcade-sketch: subtle bevel frame
+  // inside the 960×600 canvas, preserves setupHiDPI transform (1 logical px == 1 line).
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+  ctx.strokeRect(1.5, 1.5, W - 3, H - 3);
+
   ctx.fillStyle = `rgba(255,255,255,${CONFIG.arena.starAlpha})`;
   for (const s of stars) {
     ctx.beginPath();
@@ -65,21 +84,44 @@ export function renderArena(ctx, world, shipIdx, showRays) {
     ctx.fill();
   }
 
-  // Asteroids.
-  ctx.strokeStyle = '#9aa4b0';
-  ctx.lineWidth = 1.5;
+  // Asteroids — Rough.js ESM mandatory, no vanilla fallback.
+  // Cache once per asteroid via _roughGen.polygon seeded by asteroid shape;
+  // per-frame rc.draw(drawable) per seam copy via save/translate/restore.
+  // Drawable is centered at (0,0); world position + seam offset + spin applied
+  // via canvas transform so cache survives movement and rotation. Invalidated on
+  // shatter implicitly — new asteroid objects get new _roughDrawable.
+  const rc = rough.canvas(ctx.canvas);
   for (const a of world.asteroids) {
-    for (const [dx, dy] of seamCopies(a.x, a.y, a.r)) {
-      ctx.beginPath();
-      for (let i = 0; i < a.shape.length; i++) {
-        const ang = a.angle + (i / a.shape.length) * Math.PI * 2;
-        const px = a.x + dx + Math.cos(ang) * a.r * a.shape[i];
-        const py = a.y + dy + Math.sin(ang) * a.r * a.shape[i];
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
+    if (!a._roughDrawable) {
+      const n = a.shape.length;
+      const verts = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const ang = (i / n) * Math.PI * 2;
+        const rr = a.r * a.shape[i];
+        verts[i] = [Math.cos(ang) * rr, Math.sin(ang) * rr];
       }
-      ctx.closePath();
-      ctx.stroke();
+      // Deterministic seed derived from the shape jitter only — stable per asteroid
+      // and independent of first-render position/timing.
+      const seed = ((Math.floor(a.shape[0] * 100000) ^ Math.floor(a.shape[1] * 100000)) >>> 0) || 1;
+      a._roughDrawable = _roughGen.polygon(verts, {
+        stroke: '#1a1a1a',
+        fill: '#9aa4b0',
+        fillStyle: 'hachure',
+        roughness: 1.1,
+        bowing: 1,
+        strokeWidth: 1,
+        seed,
+      });
+    }
+  }
+  for (const a of world.asteroids) {
+    const d = a._roughDrawable;
+    for (const [dx, dy] of seamCopies(a.x, a.y, a.r)) {
+      ctx.save();
+      ctx.translate(a.x + dx, a.y + dy);
+      ctx.rotate(a.angle);
+      rc.draw(d);
+      ctx.restore();
     }
   }
 
@@ -137,6 +179,7 @@ export function renderArena(ctx, world, shipIdx, showRays) {
       ctx.closePath();
       ctx.fill();
       ctx.restore();
+      // Ship inset highlight — plain 1px white circle arc (arcade-sketch, as prototype drew it)
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1;
       ctx.beginPath();

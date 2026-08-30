@@ -1,3 +1,34 @@
+// Headless stub for `import rough from 'roughjs'` — idempotent, keeps `node verify.mjs` green on fresh clone (gitignored)
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+try {
+  const dir = 'node_modules/roughjs';
+  const pkg = `${dir}/package.json`;
+  const idx = `${dir}/index.js`;
+  if (!existsSync(pkg) || !existsSync(idx)) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(pkg, JSON.stringify({ name: 'roughjs', version: '4.6.6', type: 'module', main: 'index.js' }, null, 2));
+    const stub = `export default {
+  generator(opts={}) {
+    const b={...opts};
+    return {
+      polygon(v,o={}) { return {_kind:'polygon', verts: v.slice(), options:{...b,...o}}; }
+    };
+  },
+  canvas(el) {
+    return {
+      draw(d){ if(el){ el.__roughDrawCalls=(el.__roughDrawCalls||0)+1; } },
+    };
+  }
+};
+`;
+    writeFileSync(idx, stub);
+  }
+} catch (e) {
+  console.warn('[verify] roughjs stub creation failed:', e?.message ?? e);
+  throw e;
+}
+
+
 // Verification harness: solo evaluation, sensors, fitness semantics, NEAT
 // structure, seeded determinism, and champion JSON round-trip.
 const { CONFIG } = await import('./js/config.js');
@@ -316,6 +347,107 @@ const { setSeed, rng, randInt } = await import('./js/rng.js');
     const h2 = `${w2.agents[0].x.toFixed(6)},${w2.agents[0].y.toFixed(6)},${w2.asteroids[0].x.toFixed(2)}`;
     ok('HiDPI does not perturb deterministic physics', h === h2, `${h} vs ${h2}`);
   }
+}
+// 18. Locked Arcade Sketch — Win98 bevel + Rough ESM mandatory, no vanilla fallback
+{
+  // NOTE: hachure/draw-count asserts below exercise the headless stub's echo (node_modules/roughjs),
+  // not the real jsDelivr Rough ESM — they are wiring-regression guards (cache hit, seam 4×/1×, no vanilla stroke).
+  // Real Rough API compat is proven by browser smoke at http://127.0.0.1:8899/index.html?seed=1409546675
+  // (importmap rough.esm.js 200 CORS *, canvas pixelAvg ~52, 98.css/NES all 200, favicon 404 only).
+  const fs = await import('node:fs');
+  const src = fs.readFileSync('js/render.js', 'utf8');
+
+  // Importmap ESM path + singleton generator present
+  ok('render.js imports rough from roughjs', src.includes("import rough from 'roughjs'") || src.includes('import rough from "roughjs"'));
+  ok('render.js uses rough.generator singleton via _roughGen', src.includes('rough.generator') && src.includes('_roughGen'));
+
+  // No vanilla jitter polygon stroke remains — stroke #9aa4b0 lineWidth 1.5 deleted
+  ok('render.js no vanilla asteroid stroke #9aa4b0', !src.includes("strokeStyle = '#9aa4b0'") && !src.includes('strokeStyle = "#9aa4b0"'));
+
+  // Cached drawable and per-seam rc.draw with save/translate/restore
+  ok('render.js caches _roughDrawable', src.includes('_roughDrawable'));
+  ok('render.js per seam rc.draw with save/translate/restore', src.includes('rc.draw') && src.includes('ctx.save()') && src.includes('ctx.translate') && src.includes('ctx.restore()') && src.includes('rough.canvas'));
+
+
+  // Exports intact
+  ok('render.js exports setupHiDPI', src.includes('export function setupHiDPI'));
+  ok('render.js exports seamCopies', src.includes('export function seamCopies'));
+
+  // FONT updated to Space Mono / Press Start 2P
+  ok('render.js FONT uses Space Mono / Press Start 2P', src.includes('Space Mono') && src.includes('Press Start 2P'));
+
+  // Starfield still 120 dots, not replaced
+  ok('render.js starfield still 120 dots', src.includes('starCount') && src.includes('Math.random() * W'));
+
+  const makeRoughMock = () => {
+    const canvasEl = { width: 0, height: 0, style: {}, __roughDrawCalls: 0 };
+    const ctx = {
+      canvas: canvasEl,
+      fillStyle: '', strokeStyle: '', lineWidth: 1, __rects: [],
+      fillRect() { this.__fillRects = (this.__fillRects || 0) + 1; },
+      strokeRect(x, y, w, h) { this.__rects.push([x, y, w, h, this.strokeStyle]); },
+      beginPath() {}, arc() {}, fill() {}, stroke() {},
+      moveTo() {}, lineTo() {}, closePath() {}, save() {}, restore() {}, translate() {}, rotate() {},
+      setTransform() {}, clearRect() {}, createRadialGradient() { return { addColorStop() {} }; },
+    };
+    canvasEl.getContext = () => ctx;
+    ctx.canvas = canvasEl;
+    return { canvasEl, ctx };
+  };
+
+  // seamCopies wrap correctness (4× at corner, 2 at edge, 1 centered)
+  {
+    const { seamCopies } = await import('./js/render.js');
+    ok('seamCopies center -> 1 copy', seamCopies(480, 300, 10).length === 1);
+    ok('seamCopies edge left -> 2 copies', seamCopies(5, 300, 10).length === 2);
+    ok('seamCopies corner -> 4 copies', seamCopies(5, 5, 10).length === 4);
+    ok('seamCopies opposite edge still 2', seamCopies(955, 300, 10).length === 2);
+  }
+
+  // Rough drawable cache hit + seam draw count (GC-safe: 0 per-frame alloc of Drawable)
+  {
+    const { renderArena } = await import('./js/render.js');
+    const { canvasEl, ctx } = makeRoughMock();
+    const world = {
+      asteroids: [{ x: 5, y: 5, r: 38, shape: Array(10).fill(1), angle: 0, spin: 0, size: 'L' }],
+      agents: [{ x: 480, y: 300, heading: 0, alive: false, inputs: null, thrusting: false }],
+      bullets: [],
+    };
+    renderArena(ctx, world, -1, false);
+    const d1 = world.asteroids[0]._roughDrawable;
+    ok('asteroid._roughDrawable created on first render', !!d1 && d1._kind === 'polygon');
+    // ADR 0001 locked polygon option set — asserted on the drawable echo, not source text
+    ok('Rough drawable matches ADR 0001 locked option set', d1.options && d1.options.stroke === '#1a1a1a' && d1.options.fill === '#9aa4b0' && d1.options.fillStyle === 'hachure' && d1.options.roughness === 1.1 && d1.options.bowing === 1 && d1.options.strokeWidth === 1 && d1.options.fillWeight === undefined && d1.options.hachureGap === undefined);
+    ok('Rough polygon seed is a nonzero integer', Number.isInteger(d1.options.seed) && d1.options.seed >= 1);
+    const callsAfter1 = canvasEl.__roughDrawCalls;
+    ok('rough.canvas draw called per seam copy (4 at corner)', callsAfter1 === 4, String(callsAfter1));
+    // Inset bevel rects per prototype Target1 — behavioral: captured strokeRect calls
+    ok('arena inset bevel rects 0.5/959 + 1.5/957 with bevel strokes', ctx.__rects.some(r => r[0] === 0.5 && r[1] === 0.5 && r[2] === 959 && r[3] === 599 && r[4] === 'rgba(255,255,255,0.06)') && ctx.__rects.some(r => r[0] === 1.5 && r[1] === 1.5 && r[2] === 957 && r[3] === 597 && r[4] === 'rgba(0,0,0,0.22)'));
+    canvasEl.__roughDrawCalls = 0;
+    renderArena(ctx, world, -1, false);
+    const d2 = world.asteroids[0]._roughDrawable;
+    ok('asteroid._roughDrawable reused second frame (cache hit)', d1 === d2);
+    ok('rough draw called again without new Drawable', canvasEl.__roughDrawCalls === 4);
+    canvasEl.__roughDrawCalls = 0;
+    world.asteroids = [{ x: 480, y: 300, r: 38, shape: Array(10).fill(1), angle: 0, spin: 0, size: 'L' }];
+    renderArena(ctx, world, -1, false);
+    ok('center asteroid draw count 1 seam copy', canvasEl.__roughDrawCalls === 1, String(canvasEl.__roughDrawCalls));
+  }
+
+  // Throttling >16× preserved: ArenaRenderer.frame throttles arena draws (behavioral)
+  {
+    const { ArenaRenderer } = await import('./js/render.js');
+    const { canvasEl, ctx } = makeRoughMock();
+    const ar = new ArenaRenderer({ arena: canvasEl });
+    const world = { asteroids: [], agents: [], bullets: [] };
+    for (let i = 0; i < 8; i++) ar.frame({ world, realDt: 0, speed: 17 });
+    ok('ArenaRenderer throttles >16x: 2 draws in 8 frames', ctx.__fillRects === 2, String(ctx.__fillRects));
+    for (let i = 0; i < 3; i++) ar.frame({ world, realDt: 0, speed: 10 });
+    ok('ArenaRenderer draws every frame at speed<=16: 3 draws', ctx.__fillRects === 5, String(ctx.__fillRects));
+  }
+
+  // Logical size guard
+  ok('logical arena still 960x600 after Rough lock', CONFIG.arena.width === 960 && CONFIG.arena.height === 600);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
