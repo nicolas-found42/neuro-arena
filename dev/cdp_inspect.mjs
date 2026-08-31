@@ -52,12 +52,15 @@ const pageErrors = [];
 const consoleErrors = [];
 const cdnStatuses = {};
 const cdnCors = {};
+const notFoundUrls = [];
 page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e)));
 page.on('console', (m) => {
   if (m.type() === 'error') consoleErrors.push(m.text());
 });
 page.on('response', (r) => {
-  const u = r.url().toLowerCase();
+  const url = r.url();
+  if (r.status() === 404) notFoundUrls.push(url.toLowerCase());
+  const u = url.toLowerCase();
   for (const k of CDN_KEYS) if (u.includes(k.toLowerCase())) {
     cdnStatuses[k] = r.status();
     cdnCors[k] = r.headers()['access-control-allow-origin'] ?? null;
@@ -92,17 +95,15 @@ for (const sel of ['#arena', '#hud', '#chart', '#net']) {
   }
 }
 
-const result = { url: URL, pageErrors, consoleErrors, cdnStatuses, cdnCors, pixelAvg, shots, mode: launched ? 'launched:9222' : 'connected:9222' };
+const result = { url: URL, pageErrors, consoleErrors, cdnStatuses, cdnCors, notFoundUrls, pixelAvg, shots, mode: launched ? 'launched:9222' : 'connected:9222' };
 console.log(JSON.stringify(result, null, 2));
 
 const missing = CDN_KEYS.filter((k) => cdnStatuses[k] !== 200);
-const faviconOnly =
-  consoleErrors.length === 0 ||
-  (consoleErrors.length === 1 && /404|favicon/i.test(consoleErrors[0]));
-const ok = pageErrors.length === 0 && missing.length === 0 && pixelAvg !== null && faviconOnly;
+const corsMissing = CDN_KEYS.filter((k) => cdnCors[k] !== '*');
+const faviconOnly = notFoundUrls.length === 0 || notFoundUrls.every((u) => /favicon/i.test(u));
+const ok = pageErrors.length === 0 && missing.length === 0 && corsMissing.length === 0 && pixelAvg !== null && faviconOnly;
 
-if (!ok) console.error(`[cdp] FAIL missing ${missing.join(',') || 'none'} pageErrors ${pageErrors.length} faviconOnly ${faviconOnly} pixelAvg ${pixelAvg}`);
-
+if (!ok) console.error(`[cdp] FAIL missing ${missing.join(',') || 'none'} cors ${corsMissing.join(',') || 'ok'} 404s ${notFoundUrls.join(',') || 'none'} faviconOnly ${faviconOnly} pixelAvg ${pixelAvg}`);
 // Keep remote Chrome alive when we only connected; close when we launched
 if (launched) await browser.close();
 else await browser.disconnect();
