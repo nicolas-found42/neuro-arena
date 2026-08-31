@@ -101,9 +101,10 @@ console.log(JSON.stringify(result, null, 2));
 const missing = CDN_KEYS.filter((k) => cdnStatuses[k] !== 200);
 const corsMissing = CDN_KEYS.filter((k) => cdnCors[k] !== '*');
 const faviconOnly = notFoundUrls.length === 0 || notFoundUrls.every((u) => /favicon/i.test(u));
-const ok = pageErrors.length === 0 && missing.length === 0 && corsMissing.length === 0 && pixelAvg !== null && faviconOnly;
+const consoleOk = consoleErrors.length === 0 || consoleErrors.length <= notFoundUrls.filter((u) => /favicon/i.test(u)).length;
+const ok = pageErrors.length === 0 && missing.length === 0 && corsMissing.length === 0 && pixelAvg !== null && faviconOnly && consoleOk;
 
-if (!ok) console.error(`[cdp] FAIL missing ${missing.join(',') || 'none'} cors ${corsMissing.join(',') || 'ok'} 404s ${notFoundUrls.join(',') || 'none'} faviconOnly ${faviconOnly} pixelAvg ${pixelAvg}`);
+if (!ok) console.error(`[cdp] FAIL missing ${missing.join(',') || 'none'} cors ${corsMissing.join(',') || 'ok'} 404s ${notFoundUrls.join(',') || 'none'} faviconOnly ${faviconOnly} consoleOk ${consoleOk} pixelAvg ${pixelAvg}`);
 // Keep remote Chrome alive when we only connected; close when we launched
 if (launched) await browser.close();
 else await browser.disconnect();
