@@ -171,6 +171,87 @@ floor it is given) rather than retuned blindly. No constant changed, so the
 determinism contract is untouched; the 1-vs-8-worker check above still passes
 byte for byte.
 
+## Alive time: on the Wave clock, by measurement (2026-09-11, #6)
+
+**Recommendation: keep the shipped semantics — alive time stays banked on the
+60-second Wave clock.**
+**Decision: open, pending maintainer review** — this ticket changed nothing;
+the measurement below is what the decision rests on.
+
+The shipped World ends the Episode when `wave_time` reaches
+`WAVE_TIME_LIMIT` (60 s), so survival past 60 s per Wave must be bought by
+clearing the field. The alternative measured here: the clock expiry rolls the
+next Wave (fresh field, count grown, unspent Asteroids discarded) and the Ship
+flies on — only death or the 300 s `EPISODE_HARD_CAP` ends the Episode, so
+alive time accrues continuously across Waves. Everything else is identical;
+one semantic variable. Both sides: seed 2026, population 100, 10 workers.
+Blocks report maxima for best/aliveT/wave and means for mean/asteroids/medAT.
+"Current" is the shipped configuration — the 10-Generation baseline entry
+above, re-run here to 40 and to 500 Generations; "alternative" is the branch
+patch. Every value below is headless output.
+
+40 Generations (10-Generation blocks):
+
+| block | best | mean | aliveT | wave | asteroids | medAT |
+|---|---|---|---|---|---|---|
+| 1–10 cur | 4821.4 | 1099.9 | 84.0 | 1 | 2648 | 19.2 |
+| 1–10 alt | 6625.1 | 1219.5 | 133.2 | 2 | 4047 | 19.0 |
+| 11–20 cur | 7093.4 | 1338.7 | 116.9 | 1 | 2804 | 19.9 |
+| 11–20 alt | 12292.0 | 1758.6 | 199.6 | 3 | 6811 | 23.6 |
+| 21–30 cur | 12273.3 | 1791.6 | 174.4 | 2 | 6110 | 25.8 |
+| 21–30 alt | 17965.9 | 2591.9 | 244.9 | 4 | 11621 | 32.8 |
+| 31–40 cur | 9805.9 | 2119.6 | 127.7 | 2 | 6191 | 33.7 |
+| 31–40 alt | 18967.1 | 4140.1 | 259.6 | 4 | 14396 | 60.9 |
+
+500 Generations (50-Generation blocks, `current / alternative`):
+
+| block | best | mean | aliveT | wave | asteroids | medAT |
+|---|---|---|---|---|---|---|
+| 1–50 | 12273.3 / 21147.1 | 1675.6 / 2771.3 | 174.4 / 275.4 | 2 / 4 | 4676 / 10178 | 26.0 / 40.6 |
+| 51–100 | 12419.3 / 24250.7 | 2400.5 / 4354.3 | 179.3 / 300.0 | 2 / 4 | 7235 / 14949 | 42.3 / 66.3 |
+| 101–150 | 14547.3 / 26002.1 | 2638.8 / 5192.1 | 179.8 / 300.0 | 3 / 5 | 8024 / 16498 | 44.9 / 75.8 |
+| 151–200 | 17188.8 / 24426.4 | 2892.8 / 5055.9 | 200.3 / 300.0 | 3 / 4 | 9238 / 16352 | 48.6 / 76.2 |
+| 201–250 | 12761.7 / 25701.7 | 2734.4 / 5219.6 | 178.8 / 300.0 | 3 / 5 | 8221 / 16947 | 46.4 / 76.6 |
+| 251–300 | 12347.3 / 25066.9 | 2803.2 / 4954.1 | 170.5 / 300.0 | 2 / 4 | 8218 / 16450 | 52.1 / 72.9 |
+| 301–350 | 15405.1 / 25263.6 | 3029.3 / 5182.5 | 198.8 / 300.0 | 3 / 5 | 9265 / 17225 | 54.6 / 75.5 |
+| 351–400 | 18706.9 / 25931.1 | 2953.6 / 6085.7 | 211.4 / 300.0 | 3 / 5 | 8879 / 18434 | 55.7 / 87.4 |
+| 401–450 | 12415.0 / 22112.6 | 2893.8 / 5005.0 | 177.3 / 291.9 | 2 / 4 | 8717 / 15661 | 56.2 / 74.1 |
+| 451–500 | 14904.0 / 25108.4 | 3119.4 / 4686.4 | 179.1 / 300.0 | 3 / 5 | 9101 / 15653 | 56.2 / 71.1 |
+
+How to read it:
+
+- **The alternative's higher Fitness is survival inflation, not better
+  skill.** The champions destroy Asteroids at the same rate — alternative best
+  23380 points over 297.9 s = 78.5 pts/s, current best 16860 over 211.4 s =
+  79.8 pts/s — they simply bank more seconds. Fitness per second is likewise
+  flat (88.5 vs 87.3). Nothing about the alternative bred a better pilot; it
+  bred a longer-lived one, which is what its shaping pays for.
+- **Pure survival becomes worth what skill used to be worth.** Under the
+  current semantics a Ship that never clears earns at most 60 s of alive time —
+  600 Fitness plus movement and entropy; under the alternative a dodger banks
+  300 s — 3000 Fitness plus movement and entropy — without clearing a single
+  field. The alternative's median alive time passing 60 s in block 31–40
+  (60.9) is the tell: under the shipped rules alive time cannot pass second 60
+  without the field being cleared, which is why the baseline's best alive time
+  pins at exactly 60.0 in every Generation where nobody does.
+- **The Competence Gate's columns stop discriminating.** `wave` becomes a
+  clock readout (a cleared Wave and a timed-out Wave both increment it), and
+  median alive time no longer separates clearing from hiding. Asteroid points
+  would be the only remaining raw-skill signal.
+- **It costs ~2× the simulation.** 237M steps vs 130M over 500 Generations
+  (9.6M vs 11.9M steps/s — longer Episodes grow bigger fields), i.e. ~2.2×
+  the wall clock per run, for numbers that measure patience rather than
+  competence.
+
+The shipped semantics keep "survive" and "clear" the same problem: alive time
+is an honest proxy for Wave-clearing skill, the Gate stays meaningful, and the
+measured curve shows no stall the alternative would fix (mean still climbing
+at Generation 500). If the shaping ever needs smoothing, that is a constant
+change (`WAVE_TIME_LIMIT`, `WAVE_GROWTH`) measurable under the rules above —
+not a semantic rewrite. The experiment lives on the throwaway branch
+`tuning/alive-time-across-waves` (one `if` in `World::step`); `main` is
+untouched and the 1-vs-8-worker check still passes byte for byte.
+
 ## Open questions
 
 These are observations, not decisions. Each needs its own entry before a
@@ -182,10 +263,13 @@ constant moves.
   weight-noise clusters that cost Fitness at both horizons, and no threshold
   can make "Species" mean structure here. One Species is the documented
   outcome, not a bug.
-- **Alive time sits on the 60-second Wave clock.** A Ship that survives the Wave
-  is not scored for surviving the next one until the field is cleared, so
-  `waveTimeLimit` and `waveGrowth` are the two constants that decide how much of
-  the curve is "survives" rather than "clears".
+- **Alive time sits on the 60-second Wave clock.** Measured against the
+  alternative (2026-09-11, #6): see "Alive time: on the Wave clock, by
+  measurement" above. The alternative's extra Fitness is longer survival, not
+  better skill (identical champion destruction rates), and it breaks the
+  Gate's wave and median columns while doubling the cost of a run.
+  Recommendation: keep the shipped semantics; decision open for the
+  maintainer.
 - **Nothing here has been re-measured against the browser rendition.** The
   browser's numbers are gone with the old save format and were never meant to be
   reproduced bit for bit (ADR 0005).
