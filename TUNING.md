@@ -97,19 +97,91 @@ Gate's stagnation counter ticking 1/15 and resetting (Generations 2→3, 9→10)
 is the Gate working: it only trips when the median alive time stops keeping
 pace with the best.
 
+## Species: one, by measurement (2026-09-11, #5)
+
+**Decision: no constant changed — one Species is the correct outcome on this
+landscape.** The open question asked whether `spec` stuck at 1 was a threshold
+bug or the right answer; measured from the baseline seed, it is the right
+answer, and no defensible threshold change buys anything better.
+
+The mechanism: speciation compares each Genome against its Species
+representative with `Genome::distance`, and the dynamic threshold falls from
+`DELTA_TARGET_INIT` (3.0) by `DELTA_STEP` (0.15) per Generation until it pins
+at the `DELTA_MIN` floor (1.0) from Generation 14. No Genome ever gets even
+two thirds of the way to that floor. A throwaway probe bin (deleted; ~60 lines
+against the public `Run` API) ran the baseline Population and measured, each
+Generation before breeding, every Genome's distance to its nearest Species
+representative — exactly the comparison speciation makes — decomposed into the
+structural term `(excess+disjoint)/size` and the weight term
+`DISTANCE_C3 · mean|Δw|`. Worst case per 50-Generation block, seed 2026:
+
+```
+gen   1-500  maxNearest 0.516  maxStructural 0.073  maxWeight 0.511
+gen 151-500  maxNearest 0.601  maxStructural 0.139  maxWeight 0.488
+gen 301-500  maxNearest 0.633  maxStructural 0.120  maxWeight 0.538
+gen 451-500  maxNearest 0.581  maxStructural 0.115  maxWeight 0.500
+```
+
+The weight term saturates near 0.5 (weights clamp to ±4 and selection
+compresses matching weights), the structural term never exceeds 0.141 in 500
+Generations, and topology barely moves: mean connections sit at 105.x at
+Generation 40 against the founding 105, maxing at 165 by Generation 500 —
+which the division by genome size shrinks to ≤ 0.14 of distance. The 40- and
+500-Generation baselines keep `spec` at 1 throughout (delta pinned at 1.00
+from Generation 14) while mean Fitness still climbs (669.5 → 2309.4 by
+Generation 40; block average ~3119 by Generations 451–500), so the single
+Species is not a stalled Population.
+
+### Could any single constant change it?
+
+One constant per run, seed 2026, against the baseline entry above:
+
+| run | spec | mean @40 | best (run) | meanAvg 451–500 | best @500 | rate |
+|---|---|---|---|---|---|---|
+| baseline (`DELTA_MIN` 1.0) | 1 | 2309.4 | 12273.3 | 3119 | 18706.9 | 11.9M steps/s |
+| `DELTA_MIN` 0.4 · 40 Generations | 2 (gen 21) | 1540.6 | 8132.9 | — | — | 13.0M steps/s |
+| `DELTA_MIN` 0.3 · 40 Generations | 3 (gen 19) | 1919.1 | 9946.2 | — | — | 13.1M steps/s |
+| `DELTA_MIN` 0.4 · 500 Generations | 2–3 | — | — | 2032 | 14392.9 | 12.3M steps/s |
+
+A floor inside the weight spread (pairwise distances span roughly 0.25 mean to
+0.66 max) does found 2–3 Species, but:
+
+- **They are weight-noise clusters, not structural niches.** With a 0.3–0.4
+  threshold and a structural term that never exceeds 0.14, membership is
+  decided almost entirely by mean weight difference. The controller's target
+  of 8–12 Species (`SPECIES_COUNT_MIN`/`MAX`) is never approached — the
+  threshold just pins at the new floor, saturated exactly as before.
+- **They cost learning at both horizons.** Mean Fitness lands 17–33% below
+  baseline at Generation 40; over 500 Generations the block averages stay
+  300–1000 lower (2032 vs 3119 in the last block) and the best Genome is worse
+  too (14392.9 vs 18706.9).
+- **Structure-only speciation is unreachable by any threshold.** It would need
+  the weight term removed (`DISTANCE_C3 → 0`) *and* a floor below every
+  measured structural maximum (≤ 0.14) — two constants against the one-change
+  rule — and at that floor the Population, whose topologies are near-identical,
+  collapses back into one Species anyway. There is no threshold at which
+  "Species" means structure on this landscape.
+
+The landscape is the deeper reason: nothing in the Fitness pays for
+topological novelty, so there is no divergence for Species to protect. The
+best Genome of the 500-Generation baseline still has the founding shape at
+heart — 35 nodes / 130 connections against the founding 26 / 105. The dynamic
+threshold is therefore documented as inert in both regimes (pinned at whatever
+floor it is given) rather than retuned blindly. No constant changed, so the
+determinism contract is untouched; the 1-vs-8-worker check above still passes
+byte for byte.
+
 ## Open questions
 
 These are observations, not decisions. Each needs its own entry before a
 constant moves.
 
-- **Species count is flat at 1 through Generation 10.** Compatibility distance
-  is dominated by the matching-weight term (`distanceC3 = 0.4` × a mean weight
-  difference of about 0.7 ≈ 0.28) while `deltaTarget` only falls from 3.0 toward
-  the `deltaMin` floor of 1.0, so a Population that starts with one topology
-  stays one Species until enough excess genes exist to clear the threshold. If
-  structural diversification is wanted earlier, the thresholds to examine are
-  `deltaTargetInit`/`deltaStep`/`deltaMin` and `distanceC3` — measured at 40
-  Generations first, since speciation usually shows up late rather than never.
+- **Species count is flat at 1.** Answered by measurement (2026-09-11, #5):
+  see "Species: one, by measurement" above. The threshold floor sits ~2–3×
+  above every distance the Population can reach, splits inside the spread are
+  weight-noise clusters that cost Fitness at both horizons, and no threshold
+  can make "Species" mean structure here. One Species is the documented
+  outcome, not a bug.
 - **Alive time sits on the 60-second Wave clock.** A Ship that survives the Wave
   is not scored for surviving the next one until the field is cleared, so
   `waveTimeLimit` and `waveGrowth` are the two constants that decide how much of
