@@ -231,9 +231,10 @@ How to read it:
   600 Fitness plus movement and entropy; under the alternative a dodger banks
   300 s — 3000 Fitness plus movement and entropy — without clearing a single
   field. The alternative's median alive time passing 60 s in block 31–40
-  (60.9) is the tell: under the shipped rules alive time cannot pass second 60
-  without the field being cleared, which is why the baseline's best alive time
-  pins at exactly 60.0 in every Generation where nobody does.
+  (60.9) is the tell: under the shipped rules alive time is capped at the 60 s
+  Wave clock unless a Wave is cleared, so a no-clear Generation's best Ship
+  stops at or below the clock — and in the recorded baseline it stops exactly
+  there, 60.0, in all 18 Generations where nobody cleared.
 - **The Competence Gate's columns stop discriminating.** `wave` becomes a
   clock readout (a cleared Wave and a timed-out Wave both increment it), and
   median alive time no longer separates clearing from hiding. Asteroid points
