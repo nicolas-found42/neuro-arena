@@ -308,18 +308,22 @@ impl World {
         }
         collide_asteroids(&mut self.asteroids);
 
-        // Wave escalation: clearing the field grows the next Wave.
-        if self.asteroids.is_empty() {
+        // EXPERIMENT, issue #6 — alive time across Waves. The Wave clock no
+        // longer ends the Episode: clearing the field or the clock expiring
+        // rolls the next Wave (a fresh field, count grown) and the Ship flies
+        // on. Only death or the Episode hard cap ends the Episode, so alive
+        // time accrues continuously across Waves instead of being capped at
+        // 60 seconds per Wave.
+        if self.asteroids.is_empty() || self.wave_time >= world_cfg::WAVE_TIME_LIMIT {
             self.wave += 1;
             self.asteroid_count = (self.asteroid_count as f64 * ast::WAVE_GROWTH).ceil() as usize;
+            self.asteroids.clear();
             self.spawn_wave();
             self.wave_time = 0.0;
         }
 
         self.wave_time += dt;
-        self.done = !self.agent.alive
-            || self.wave_time >= world_cfg::WAVE_TIME_LIMIT
-            || self.time >= world_cfg::EPISODE_HARD_CAP;
+        self.done = !self.agent.alive || self.time >= world_cfg::EPISODE_HARD_CAP;
         if self.done && !self.finalized {
             self.finalized = true;
             self.agent.fitness += entropy_bonus(&self.agent);
