@@ -68,7 +68,7 @@ pub struct Population {
     pub species: Vec<Species>,
     pub best_ever: BestEver,
     pub delta_target: f64,
-    rng: Rng,
+    run_seed: u32,
     tracker: InnovationTracker,
     next_species_id: u32,
 }
@@ -80,16 +80,15 @@ impl Population {
         let mut rng = derive_stream(run_seed, 1, 0, Lane::Breeding);
         let mut tracker = InnovationTracker::new();
         let genomes: Vec<Genome> = (0..size).map(|_| Genome::new(&mut rng, &mut tracker)).collect();
-        Self::from_genomes(genomes, rng, tracker)
+        Self::from_genomes(genomes, run_seed, tracker)
     }
 
     /// A Population that replays one Genome in every slot — watch mode, where
     /// breeding is switched off.
     pub fn showcase(genome: &Genome, size: usize, run_seed: u32) -> Self {
-        let rng = derive_stream(run_seed, 1, 0, Lane::Breeding);
         let tracker = InnovationTracker::from_genome(genome);
-        let genomes = (0..size).map(|_| genome.deep_copy()).collect();
-        Self::from_genomes(genomes, rng, tracker)
+        let genomes = (0..size).map(|_| genome.clone()).collect();
+        Self::from_genomes(genomes, run_seed, tracker)
     }
 
     /// A Population seeded from one Genome: the loaded Genome as the first
@@ -101,9 +100,9 @@ impl Population {
         let mut tracker = InnovationTracker::from_genome(genome);
         let size = size.max(1);
         let mut genomes = Vec::with_capacity(size);
-        genomes.push(genome.deep_copy());
+        genomes.push(genome.clone());
         for _ in 1..size {
-            let mut child = genome.deep_copy();
+            let mut child = genome.clone();
             if rng.chance(neat::ADD_NODE_RATE) {
                 child.mutate_add_node(&mut rng, &mut tracker);
             }
@@ -113,10 +112,10 @@ impl Population {
             child.mutate_weights(&mut rng);
             genomes.push(child);
         }
-        Self::from_genomes(genomes, rng, tracker)
+        Self::from_genomes(genomes, run_seed, tracker)
     }
 
-    fn from_genomes(genomes: Vec<Genome>, rng: Rng, tracker: InnovationTracker) -> Self {
+    fn from_genomes(genomes: Vec<Genome>, run_seed: u32, tracker: InnovationTracker) -> Self {
         let networks = genomes.iter().map(Network::from_genome).collect();
         Self {
             genomes,
@@ -130,7 +129,7 @@ impl Population {
                 species_id: None,
             },
             delta_target: neat::DELTA_TARGET_INIT,
-            rng,
+            run_seed,
             tracker,
             next_species_id: 1,
         }
@@ -140,6 +139,9 @@ impl Population {
     pub fn evolve(&mut self, fitnesses: &[f64]) {
         let size = fitnesses.len();
         debug_assert_eq!(size, self.genomes.len());
+        // Breeding draws from its own stream, derived per Generation (ADR 0005):
+        // the founders come from stream 1, and each Generation is bred from its own.
+        let mut rng = derive_stream(self.run_seed, self.generation + 1, 0, Lane::Breeding);
         let best = fitnesses.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let mean = fitnesses.iter().sum::<f64>() / size as f64;
         self.history.push(GenerationStats {
@@ -256,7 +258,7 @@ impl Population {
         for (index, species) in species.iter_mut().enumerate() {
             species.offspring = quota[index];
             for _ in 0..quota[index] {
-                next.push(self.offspring(species, &old));
+                next.push(self.offspring(species, &old, &mut rng));
             }
         }
 
@@ -266,7 +268,7 @@ impl Population {
             .flat_map(|s| s.survivors.iter().copied())
             .collect();
         while next.len() < size && !pool.is_empty() {
-            let pick = pool[self.rng.below(pool.len())];
+            let pick = pool[rng.below(pool.len())];
             next.push(old[pick.0].clone());
         }
         next.truncate(size);
@@ -276,7 +278,7 @@ impl Population {
         species.retain(|s| s.champion_copied || s.offspring > 0);
         for species in &mut species {
             if !species.members.is_empty() {
-                let pick = self.rng.below(species.members.len());
+                let pick = rng.below(species.members.len());
                 species.representative = old[species.members[pick].0].clone();
             }
         }
@@ -309,11 +311,11 @@ impl Population {
 
     /// One child: crossover or clone, then the structural and weight mutations,
     /// in a fixed order so a seed replays exactly.
-    fn offspring(&mut self, species: &Species, old: &[Genome]) -> Genome {
+    fn offspring(&mut self, species: &Species, old: &[Genome], mut rng: &mut Rng) -> Genome {
         let pick = |rng: &mut Rng| species.survivors[rng.below(species.survivors.len())];
-        let mut child = if self.rng.chance(neat::CROSSOVER_RATE) {
-            let a = pick(&mut self.rng);
-            let b = pick(&mut self.rng);
+        let mut child = if rng.chance(neat::CROSSOVER_RATE) {
+            let a = pick(&mut rng);
+            let b = pick(&mut rng);
             if a.0 == b.0 {
                 old[a.0].clone()
             } else {
@@ -324,18 +326,18 @@ impl Population {
                 } else {
                     None
                 };
-                Genome::crossover(&old[a.0], &old[b.0], a_fitter, &mut self.rng)
+                Genome::crossover(&old[a.0], &old[b.0], a_fitter, &mut rng)
             }
         } else {
-            old[pick(&mut self.rng).0].clone()
+            old[pick(&mut rng).0].clone()
         };
-        if self.rng.chance(neat::ADD_NODE_RATE) {
-            child.mutate_add_node(&mut self.rng, &mut self.tracker);
+        if rng.chance(neat::ADD_NODE_RATE) {
+            child.mutate_add_node(&mut rng, &mut self.tracker);
         }
-        if self.rng.chance(neat::ADD_CONNECTION_RATE) {
-            child.mutate_add_connection(&mut self.rng, &mut self.tracker);
+        if rng.chance(neat::ADD_CONNECTION_RATE) {
+            child.mutate_add_connection(&mut rng, &mut self.tracker);
         }
-        child.mutate_weights(&mut self.rng);
+        child.mutate_weights(&mut rng);
         child
     }
 }

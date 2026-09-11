@@ -167,7 +167,7 @@ fn the_gate_trips_when_skill_stops_improving() {
         competence: Competence {
             alive_time,
             wave: 0,
-            rocks: 0.0,
+            asteroids: 0.0,
         },
     };
     // A flat run: every Generation reaches the same competence.

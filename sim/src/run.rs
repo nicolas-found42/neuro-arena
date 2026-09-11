@@ -127,7 +127,7 @@ impl Generation {
             competence: Competence {
                 alive_time: world.agent.stats.alive_time,
                 wave: world.wave,
-                rocks: world.agent.stats.rock_points,
+                asteroids: world.agent.stats.asteroid_points,
             },
             steps: (world.time / crate::config::DT).round() as u64,
         }

@@ -96,8 +96,8 @@ fn main() {
             args.seed, args.generations, args.population, args.workers
         );
         println!(
-            "# {:>3}  {:>10}  {:>10}  {:>7}  {:>4}  {:>8}  {:>7}  {:>4}  {:>5}  {:>6}",
-            "gen", "best", "mean", "aliveT", "wave", "rocks", "medAT", "spec", "delta", "gate"
+            "# {:>3}  {:>10}  {:>10}  {:>7}  {:>4}  {:>9}  {:>7}  {:>4}  {:>5}  {:>6}",
+            "gen", "best", "mean", "aliveT", "wave", "asteroids", "medAT", "spec", "delta", "gate"
         );
     }
 
@@ -115,13 +115,13 @@ fn main() {
         steps += episode_steps;
         if !args.quiet {
             println!(
-                "  {:>3}  {:>10.1}  {:>10.1}  {:>7.1}  {:>4}  {:>8.0}  {:>7.1}  {:>4}  {:>5.2}  {:>3}/{}",
+                "  {:>3}  {:>10.1}  {:>10.1}  {:>7.1}  {:>4}  {:>9.0}  {:>7.1}  {:>4}  {:>5.2}  {:>3}/{}",
                 report.generation,
                 report.best,
                 report.mean,
                 report.gate.best_alive_time,
                 report.gate.best_wave,
-                report.gate.best_rocks,
+                report.gate.best_asteroids,
                 report.gate.median_alive_time,
                 report.species_count,
                 report.delta_target,
@@ -154,12 +154,12 @@ fn main() {
     }
     if let Some(best) = run.best() {
         println!(
-            "# best Genome: fitness {:.1}, Generation {}, alive {:.1}s, Wave {}, {} rocks, {} nodes / {} connections",
+            "# best Genome: fitness {:.1}, Generation {}, alive {:.1}s, Wave {}, {} asteroids, {} nodes / {} connections",
             best.fitness,
             best.generation,
             best.competence.alive_time,
             best.competence.wave,
-            best.competence.rocks as u64,
+            best.competence.asteroids as u64,
             best.genome.node_count(),
             best.genome.enabled_connection_count(),
         );

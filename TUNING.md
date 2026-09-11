@@ -69,27 +69,33 @@ Baseline, for the entries below to be compared against:
 ```
 $ neuroarena-headless --seed 2026 --generations 10
 # NeuroArena headless — seed 2026 · 10 Generations · population 100 · 10 workers
-# gen        best        mean   aliveT  wave     rocks    medAT  spec  delta    gate
-    1      2885.3       669.5     60.0     0      2300     18.1     1   2.85    0/15
-    2      3300.2      1007.4     60.0     0      2500     23.3     1   2.70    0/15
-    3      3278.5      1057.8     60.0     0      2500     20.7     1   2.55    0/15
-    4      3341.8      1102.6     60.0     0      2500     21.2     1   2.40    0/15
-    5      3210.6      1162.6     60.0     0      2400     22.3     1   2.25    0/15
-    6      3247.0      1125.8     60.0     0      2400     15.7     1   2.10    1/15
-    7      3247.4      1121.6     60.0     0      2400     16.4     1   1.95    2/15
-    8      4686.6      1228.6     77.1     1      3700     18.7     1   1.80    0/15
-    9      3329.8      1168.0     60.6     1      2600     17.2     1   1.65    1/15
-   10      3884.1      1356.1     65.0     1      2980     18.5     1   1.50    2/15
-# 10 Generations, 1000 Episodes, 1511361 steps (25189.3 sim-seconds) in 0.13s
-#   — measured 12 059 561 steps/s, ≈201 000× real time, 10 workers, Apple M5
-# best Genome: fitness 4686.6, Generation 8, alive 77.1s, Wave 1, 3700 rocks
+# gen        best        mean   aliveT  wave  asteroids    medAT  spec  delta    gate
+    1      2885.3       669.5     60.0     0       2300     18.1     1   2.85    0/15
+    2      3231.0       787.4     60.0     0       2300     16.2     1   2.70    1/15
+    3      3215.5      1135.9     60.0     0       2500     18.3     1   2.55    0/15
+    4      3198.2      1055.2     60.0     0       2400     15.5     1   2.40    1/15
+    5      3121.3      1152.0     60.0     0       2350     20.9     1   2.25    0/15
+    6      4393.1      1149.1     74.4     1       3460     19.0     1   2.10    0/15
+    7      3084.2      1266.4     60.0     0       2300     22.4     1   1.95    0/15
+    8      4821.4      1383.8     84.0     1       3870     23.8     1   1.80    0/15
+    9      3280.2      1148.1     60.0     0       2500     19.5     1   1.65    1/15
+   10      3268.4      1251.6     60.0     0       2500     17.8     1   1.50    2/15
+# 10 Generations, 1000 Episodes, 1469392 steps (24489.9 sim-seconds) in 0.11s — measured 13393648 steps/s, 223227.5x realtime
+# best Genome: fitness 4821.4, Generation 8, alive 84.0s, Wave 1, 3870 asteroids, 26 nodes / 105 connections
 ```
 
-Reading it: the mean roughly doubles over ten Generations, and by Generation 8
-some member clears the first Wave — the Population is learning to survive the
-Wave clock rather than to outlive it. The Competence Gate's stagnation counter
-ticking 1/15, 2/15 and resetting is the Gate working: it only trips when the
-median alive time stops keeping pace with the best.
+Correction, same day: review against the spec found breeding consuming one
+stream carried across Generations instead of deriving `(run_seed, generation)`
+per Generation as ADR 0005 specifies. Fixed — which shifted every Fitness
+number, so the baseline above is post-correction. No constant changed, and
+one worker versus eight still produces byte-identical output.
+
+Reading it: the mean roughly doubles over ten Generations (669.5 → 1251.6),
+the first Wave falls in Generation 6 (74.4 s alive), and the best Genome
+(Generation 8) survives 84.0 s and destroys 3870 Asteroids. The Competence
+Gate's stagnation counter ticking 1/15 and resetting (Generations 2→3, 9→10)
+is the Gate working: it only trips when the median alive time stops keeping
+pace with the best.
 
 ## Open questions
 

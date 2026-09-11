@@ -6,8 +6,8 @@
 //!
 //! The step order is a rule, not an implementation detail, because it decides
 //! what a Ship can see and hit:
-//! sense → think → act → move → die to a rock; then Bullets; then Asteroids;
-//! then rock-rock collisions; then Wave escalation and Episode end.
+//! sense → think → act → move → die to a asteroid; then Bullets; then Asteroids;
+//! then asteroid-asteroid collisions; then Wave escalation and Episode end.
 
 use crate::asteroid::{collide_asteroids, Asteroid};
 use crate::config::asteroid::{self as ast, Size};
@@ -45,7 +45,7 @@ pub struct Stats {
     /// Bitset over the 8×5 arena-coverage grid.
     pub cells: u64,
     pub alive_time: f64,
-    pub rock_points: f64,
+    pub asteroid_points: f64,
 }
 
 impl Default for Stats {
@@ -59,7 +59,7 @@ impl Default for Stats {
             speed_sum: 0.0,
             cells: 0,
             alive_time: 0.0,
-            rock_points: 0.0,
+            asteroid_points: 0.0,
         }
     }
 }
@@ -83,16 +83,16 @@ pub struct Agent {
     /// Last sensor frame, kept for the Sensor Ray overlay.
     pub inputs: [f64; nn::INPUTS],
     pub stats: Stats,
-    brain: Option<Network>,
+    network: Option<Network>,
 }
 
 impl Agent {
-    pub fn brain(&self) -> Option<&Network> {
-        self.brain.as_ref()
+    pub fn network(&self) -> Option<&Network> {
+        self.network.as_ref()
     }
 
-    pub fn into_brain(self) -> Option<Network> {
-        self.brain
+    pub fn into_network(self) -> Option<Network> {
+        self.network
     }
 }
 
@@ -105,7 +105,7 @@ pub struct Bullet {
     pub life: f64,
 }
 
-/// One Episode: the Arena, one Agent, one rock field.
+/// One Episode: the Arena, one Agent, one asteroid field.
 pub struct World {
     rng: Rng,
     pub time: f64,
@@ -117,13 +117,13 @@ pub struct World {
     pub agent: Agent,
     pub asteroids: Vec<Asteroid>,
     pub bullets: Vec<Bullet>,
-    rock_count: usize,
+    asteroid_count: usize,
 }
 
 impl World {
-    /// A fresh Episode. `brain` is the controlling Network; `None` gives a
+    /// A fresh Episode. The `network` controls the Ship; `None` gives a
     /// Ship that never acts, which is what the sensors-only probes use.
-    pub fn new(rng: Rng, brain: Option<Network>) -> Self {
+    pub fn new(rng: Rng, network: Option<Network>) -> Self {
         let mut rng = rng;
         let ship = Ship {
             x: crate::config::arena::WIDTH / 2.0 + rng.range(-ship_cfg::SPAWN_JITTER, ship_cfg::SPAWN_JITTER),
@@ -149,11 +149,11 @@ impl World {
                 thrusting: false,
                 inputs: [0.0; nn::INPUTS],
                 stats: Stats::default(),
-                brain,
+                network,
             },
             asteroids: Vec::new(),
             bullets: Vec::new(),
-            rock_count: ast::INITIAL_COUNT,
+            asteroid_count: ast::INITIAL_COUNT,
         };
         world.spawn_wave();
         world
@@ -188,10 +188,10 @@ impl World {
             // a Network is steering.
             let inputs = sense(&self.agent, &self.asteroids);
             self.agent.inputs = inputs;
-            if self.agent.brain.is_some() {
+            if self.agent.network.is_some() {
                 let out = self
                     .agent
-                    .brain
+                    .network
                     .as_mut()
                     .expect("checked above")
                     .activate(&inputs);
@@ -261,10 +261,10 @@ impl World {
             stats.speed_sum += sp;
             stats.cells |= coverage_bit(ship.x, ship.y);
 
-            for rock in &self.asteroids {
-                let dx = tdx(rock.x, ship.x);
-                let dy = tdy(rock.y, ship.y);
-                let rr = rock.r + hit_pad;
+            for asteroid in &self.asteroids {
+                let dx = tdx(asteroid.x, ship.x);
+                let dy = tdy(asteroid.y, ship.y);
+                let rr = asteroid.r + hit_pad;
                 if dx * dx + dy * dy < rr * rr {
                     self.agent.alive = false;
                     break;
@@ -272,7 +272,7 @@ impl World {
             }
         }
 
-        // Bullets: move, expire, and split the rocks they hit.
+        // Bullets: move, expire, and split the asteroids they hit.
         for index in (0..self.bullets.len()).rev() {
             let (bx, by) = {
                 let b = &mut self.bullets[index];
@@ -287,31 +287,31 @@ impl World {
                 self.agent.bullets_out = self.agent.bullets_out.saturating_sub(1);
                 continue;
             }
-            for rock_index in (0..self.asteroids.len()).rev() {
-                let rock = &self.asteroids[rock_index];
-                let dx = tdx(rock.x, bx);
-                let dy = tdy(rock.y, by);
-                let rr = rock.r + bullet::RADIUS;
+            for asteroid_index in (0..self.asteroids.len()).rev() {
+                let asteroid = &self.asteroids[asteroid_index];
+                let dx = tdx(asteroid.x, bx);
+                let dy = tdy(asteroid.y, by);
+                let rr = asteroid.r + bullet::RADIUS;
                 if dx * dx + dy * dy < rr * rr {
                     self.bullets.remove(index);
                     self.agent.bullets_out = self.agent.bullets_out.saturating_sub(1);
-                    self.agent.fitness += rock.points;
-                    self.agent.stats.rock_points += rock.points;
-                    self.split_asteroid(rock_index);
+                    self.agent.fitness += asteroid.points;
+                    self.agent.stats.asteroid_points += asteroid.points;
+                    self.split_asteroid(asteroid_index);
                     break;
                 }
             }
         }
 
-        for rock in &mut self.asteroids {
-            rock.advance(dt);
+        for asteroid in &mut self.asteroids {
+            asteroid.advance(dt);
         }
         collide_asteroids(&mut self.asteroids);
 
         // Wave escalation: clearing the field grows the next Wave.
         if self.asteroids.is_empty() {
             self.wave += 1;
-            self.rock_count = (self.rock_count as f64 * ast::WAVE_GROWTH).ceil() as usize;
+            self.asteroid_count = (self.asteroid_count as f64 * ast::WAVE_GROWTH).ceil() as usize;
             self.spawn_wave();
             self.wave_time = 0.0;
         }
@@ -328,7 +328,7 @@ impl World {
 
     fn spawn_wave(&mut self) {
         let ship = self.agent.ship;
-        for _ in 0..self.rock_count {
+        for _ in 0..self.asteroid_count {
             let (x, y) = loop {
                 let x = self.rng.range(0.0, crate::config::arena::WIDTH);
                 let y = self.rng.range(0.0, crate::config::arena::HEIGHT);
@@ -337,7 +337,7 @@ impl World {
                 }
             };
             let speed_range = Size::Large.speed_range();
-            let rock = Asteroid::new(
+            let asteroid = Asteroid::new(
                 Size::Large,
                 x,
                 y,
@@ -345,14 +345,14 @@ impl World {
                 self.rng.range(speed_range.0, speed_range.1),
                 &mut self.rng,
             );
-            self.asteroids.push(rock);
+            self.asteroids.push(asteroid);
         }
     }
 
-    /// Split a rock into two children that inherit the parent's momentum plus a
-    /// radial spread impulse. A small rock simply disappears.
+    /// Split a asteroid into two children that inherit the parent's momentum plus a
+    /// radial spread impulse. A small asteroid simply disappears.
     ///
-    /// The field is order-sensitive (pairwise collisions and nearest-rock ties
+    /// The field is order-sensitive (pairwise collisions and nearest-asteroid ties
     /// both read it in order), so removal keeps the list order.
     fn split_asteroid(&mut self, index: usize) {
         let parent = self.asteroids.remove(index);

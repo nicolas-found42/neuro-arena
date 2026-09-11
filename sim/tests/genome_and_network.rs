@@ -301,7 +301,7 @@ fn distance_is_zero_for_identical_genomes_and_grows_with_divergence() {
     let mut tracker = InnovationTracker::new();
     let mut rng = Rng::from_seed(9);
     let mut a = Genome::new(&mut rng, &mut tracker);
-    let mut b = a.deep_copy();
+    let mut b = a.clone();
     assert_eq!(Genome::distance(&a, &b), 0.0);
 
     b.mutate_add_node(&mut rng, &mut tracker);

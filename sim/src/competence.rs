@@ -17,7 +17,9 @@ use crate::config::gate;
 pub struct Competence {
     pub alive_time: f64,
     pub wave: u32,
-    pub rocks: f64,
+    /// The save-file key is spec-pinned; the glossary bans the synonym in code.
+    #[serde(rename = "rocks")]
+    pub asteroids: f64,
 }
 
 /// What one Generation contributes to the Gate.
@@ -32,7 +34,7 @@ pub struct EpisodeRecord {
 pub struct GateVerdict {
     pub best_alive_time: f64,
     pub best_wave: u32,
-    pub best_rocks: f64,
+    pub best_asteroids: f64,
     pub median_alive_time: f64,
     /// No best was beaten and the median alive time is below the window's floor.
     pub stagnant: bool,
@@ -46,7 +48,7 @@ pub struct GateVerdict {
 pub struct CompetenceGate {
     pub best_alive_time: f64,
     pub best_wave: u32,
-    pub best_rocks: f64,
+    pub best_asteroids: f64,
     medians: VecDeque<f64>,
     pub run_of_stagnant: u32,
     pub tripped: bool,
@@ -58,7 +60,7 @@ impl Default for CompetenceGate {
         Self {
             best_alive_time: 0.0,
             best_wave: 0,
-            best_rocks: 0.0,
+            best_asteroids: 0.0,
             medians: VecDeque::new(),
             run_of_stagnant: 0,
             tripped: false,
@@ -79,7 +81,7 @@ impl CompetenceGate {
             return GateVerdict {
                 best_alive_time: self.best_alive_time,
                 best_wave: self.best_wave,
-                best_rocks: self.best_rocks,
+                best_asteroids: self.best_asteroids,
                 median_alive_time: self.median_alive_time(),
                 stagnant: false,
                 run_of_stagnant: self.run_of_stagnant,
@@ -89,19 +91,19 @@ impl CompetenceGate {
         let mut alive_times: Vec<f64> = records.iter().map(|r| r.competence.alive_time).collect();
         let best_alive_time = alive_times.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let best_wave = records.iter().map(|r| r.competence.wave).max().unwrap_or(0);
-        let best_rocks = records
+        let best_asteroids = records
             .iter()
-            .map(|r| r.competence.rocks)
+            .map(|r| r.competence.asteroids)
             .fold(f64::NEG_INFINITY, f64::max);
         alive_times.sort_by(f64::total_cmp);
         let median = alive_times[alive_times.len() / 2];
 
         let improved = best_alive_time > self.best_alive_time
             || best_wave > self.best_wave
-            || best_rocks > self.best_rocks;
+            || best_asteroids > self.best_asteroids;
         self.best_alive_time = self.best_alive_time.max(best_alive_time);
         self.best_wave = self.best_wave.max(best_wave);
-        self.best_rocks = self.best_rocks.max(best_rocks);
+        self.best_asteroids = self.best_asteroids.max(best_asteroids);
 
         self.medians.push_back(median);
         while self.medians.len() > gate::MEDIAN_WINDOW {
@@ -118,7 +120,7 @@ impl CompetenceGate {
         GateVerdict {
             best_alive_time,
             best_wave,
-            best_rocks,
+            best_asteroids,
             median_alive_time: median,
             stagnant,
             run_of_stagnant: self.run_of_stagnant,

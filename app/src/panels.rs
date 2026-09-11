@@ -198,9 +198,9 @@ pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
     gate_row(
         painter,
         &mut skill,
-        "rocks",
-        format!("{:.0}", info.competence.rocks),
-        format!("{:.0}", info.gate.best_rocks),
+        "asteroids",
+        format!("{:.0}", info.competence.asteroids),
+        format!("{:.0}", info.gate.best_asteroids),
         live_right,
     );
     if let Some(y) = skill.next(ROW) {
@@ -423,7 +423,7 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
 /// outputs with the activation each is producing right now.
 ///
 /// Every frame redraws from the `Network` the shell hands over, so what is on
-/// screen is the brain that is flying, never a stale one.
+/// screen is the network that is flying, never a stale one.
 pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network: &Network) {
     let body = frame(painter, rect, "Network");
     if body.w < 40.0 || body.h < 24.0 {

@@ -31,7 +31,7 @@ fn golden_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/arena-960x600.txt")
 }
 
-/// A World with nothing left to chance: fixed Ship, fixed rocks, fixed bullets.
+/// A World with nothing left to chance: fixed Ship, fixed asteroids, fixed bullets.
 fn fixed_world() -> World {
     let mut world = World::new(Rng::from_seed(20260911), None);
     world.agent.ship.x = 300.0;
@@ -41,7 +41,7 @@ fn fixed_world() -> World {
     world.agent.ship.vy = 0.0;
     world.agent.thrusting = true;
     world.asteroids.clear();
-    let rocks: [(Size, f64, f64, f64, f64); 6] = [
+    let asteroids: [(Size, f64, f64, f64, f64); 6] = [
         (Size::Large, 700.0, 160.0, 20.0, 30.0),
         (Size::Medium, 820.0, 420.0, 35.0, 55.0),
         (Size::Small, 180.0, 140.0, 60.0, 70.0),
@@ -49,11 +49,11 @@ fn fixed_world() -> World {
         (Size::Small, 40.0, 560.0, 90.0, 80.0),
         (Size::Medium, 940.0, 300.0, 45.0, 40.0),
     ];
-    for (index, (size, x, y, dir_deg, speed)) in rocks.iter().enumerate() {
+    for (index, (size, x, y, dir_deg, speed)) in asteroids.iter().enumerate() {
         let mut rng = Rng::from_seed(1000 + index as u32);
-        let mut rock = Asteroid::new(*size, *x, *y, dir_deg.to_radians(), *speed, &mut rng);
-        rock.spin = 0.0;
-        world.asteroids.push(rock);
+        let mut asteroid = Asteroid::new(*size, *x, *y, dir_deg.to_radians(), *speed, &mut rng);
+        asteroid.spin = 0.0;
+        world.asteroids.push(asteroid);
     }
     world.bullets.push(Bullet {
         x: 420.0,
@@ -233,7 +233,7 @@ fn the_same_world_renders_the_same_pixels_twice() {
 }
 
 #[test]
-fn the_ship_rocks_and_bullets_land_where_the_simulation_puts_them() {
+fn the_ship_asteroids_and_bullets_land_where_the_simulation_puts_them() {
     let world = fixed_world();
     let frame = render(&world, false);
 
@@ -250,13 +250,13 @@ fn the_ship_rocks_and_bullets_land_where_the_simulation_puts_them() {
     }
     assert!(ship_pixels > 20, "the Ship is drawn: {ship_pixels} pixels");
 
-    // An Asteroid: the Large rock at (700, 160) is drawn in the rock grey, which
+    // An Asteroid: the Large asteroid at (700, 160) is drawn in the asteroid grey, which
     // is brighter than the empty floor everywhere around it.
     let floor = frame.pixel(480, 20);
-    let rock = frame.pixel(700, 160);
+    let asteroid = frame.pixel(700, 160);
     assert!(
-        rock[0] > floor[0] + 20 && rock[1] > floor[1] + 20,
-        "the rock reads brighter than the floor: {rock:?} vs {floor:?}"
+        asteroid[0] > floor[0] + 20 && asteroid[1] > floor[1] + 20,
+        "the asteroid reads brighter than the floor: {asteroid:?} vs {floor:?}"
     );
 
     // A Bullet: the one at (420, 300) is bright and warm.
@@ -297,16 +297,16 @@ fn seam_copies_draw_entities_that_straddle_the_edge() {
     world.asteroids.clear();
     world.asteroids.push({
         let mut rng = Rng::from_seed(7);
-        let mut rock = Asteroid::new(Size::Large, 4.0, 300.0, 0.0, 30.0, &mut rng);
-        rock.spin = 0.0;
-        rock
+        let mut asteroid = Asteroid::new(Size::Large, 4.0, 300.0, 0.0, 30.0, &mut rng);
+        asteroid.spin = 0.0;
+        asteroid
     });
     let frame = render(&world, false);
-    // The rock straddles the left edge, so it is also drawn on the right one.
+    // The asteroid straddles the left edge, so it is also drawn on the right one.
     let left = frame.pixel(4, 300);
     let right = frame.pixel(WIDTH - 5, 300);
     assert!(
         left[0] > 80 && right[0] > 80,
-        "both the rock and its Seam Copy are drawn: {left:?} {right:?}"
+        "both the asteroid and its Seam Copy are drawn: {left:?} {right:?}"
     );
 }

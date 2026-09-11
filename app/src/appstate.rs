@@ -492,9 +492,9 @@ impl App {
             Key::Named(NamedKey::Enter) => {
                 self.controls.seed_editing = false;
                 match self.controls.seed_value().or_else(|| self.controls.seed_text.parse().ok()) {
-                    Some(seed) if seed > 0 => self.restart(seed, None),
+                    Some(seed) => self.restart(seed, None),
                     _ => {
-                        self.message = "the seed field must hold a number above zero".to_string();
+                        self.message = "the seed field must hold a non-negative number".to_string();
                         self.message_is_error = true;
                     }
                 }
@@ -580,7 +580,7 @@ impl App {
             competence: sim::Competence {
                 alive_time: world.map(|world| world.agent.stats.alive_time).unwrap_or(0.0),
                 wave: world.map(|world| world.wave).unwrap_or(0),
-                rocks: world.map(|world| world.agent.stats.rock_points).unwrap_or(0.0),
+                asteroids: world.map(|world| world.agent.stats.asteroid_points).unwrap_or(0.0),
             },
             gate: self.run.gate(),
             species: self.run.population().species.len(),
@@ -591,7 +591,7 @@ impl App {
         panels::draw_hud(painter, layout.hud, &info);
         panels::draw_chart(painter, layout.chart, self.run.history());
         if let Some(world) = world {
-            if let Some(network) = world.agent.brain() {
+            if let Some(network) = world.agent.network() {
                 let index = self
                     .watched_member
                     .min(self.run.population().genomes.len().saturating_sub(1));

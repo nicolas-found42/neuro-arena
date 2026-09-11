@@ -1,8 +1,8 @@
 //! The Agent's 21 inputs: nine toroidal Sensor Rays plus threat telemetry.
 //!
-//! Sensing is pure — a function of the Agent and the rock field — so the whole
+//! Sensing is pure — a function of the Agent and the asteroid field — so the whole
 //! input vector is testable without stepping a World. The Arena is toroidal, so
-//! rocks are seen across the seam and every distance here is a wrapped one.
+//! asteroids are seen across the seam and every distance here is a wrapped one.
 
 use crate::asteroid::Asteroid;
 use crate::config::asteroid::Size;
@@ -25,21 +25,21 @@ pub fn sense(agent: &Agent, asteroids: &[Asteroid]) -> [f64; nn::INPUTS] {
     inputs[9] = clamp(ship.vx / sens::VEL_SCALE, -1.0, 1.0);
     inputs[10] = clamp(ship.vy / sens::VEL_SCALE, -1.0, 1.0);
 
-    // Sensor Rays: nearest intersection with the rock field, toroidally.
+    // Sensor Rays: nearest intersection with the asteroid field, toroidally.
     for (k, offset_deg) in sens::RAY_OFFSETS_DEG.iter().enumerate() {
         let ang = ship.heading + offset_deg * DEG;
         let dx = ang.cos();
         let dy = ang.sin();
         let mut nearest = f64::INFINITY;
-        for rock in asteroids {
-            let ox = tdx(rock.x, ship.x);
-            let oy = tdy(rock.y, ship.y);
+        for asteroid in asteroids {
+            let ox = tdx(asteroid.x, ship.x);
+            let oy = tdy(asteroid.y, ship.y);
             let t = ox * dx + oy * dy;
             if t < 0.0 {
                 continue;
             }
             let perp2 = ox * ox + oy * oy - t * t;
-            let r2 = rock.r * rock.r;
+            let r2 = asteroid.r * asteroid.r;
             if perp2 > r2 {
                 continue;
             }
@@ -56,7 +56,7 @@ pub fn sense(agent: &Agent, asteroids: &[Asteroid]) -> [f64; nn::INPUTS] {
     }
 
     // Threat radar: one toroidal pass. The "second nearest" is the previous
-    // nearest when a closer rock displaces it — an approximation the browser
+    // nearest when a closer asteroid displaces it — an approximation the browser
     // rendition pinned, kept so the input keeps its meaning.
     let mut nearest_d2 = f64::INFINITY;
     let mut second_d2 = f64::INFINITY;
@@ -64,18 +64,18 @@ pub fn sense(agent: &Agent, asteroids: &[Asteroid]) -> [f64; nn::INPUTS] {
     let (mut nvx, mut nvy) = (0.0, 0.0);
     let mut nr = 1.0;
     let mut pressure = 0.0;
-    for rock in asteroids {
-        let dx = tdx(rock.x, ship.x);
-        let dy = tdy(rock.y, ship.y);
+    for asteroid in asteroids {
+        let dx = tdx(asteroid.x, ship.x);
+        let dy = tdy(asteroid.y, ship.y);
         let d2 = dx * dx + dy * dy;
         if d2 < nearest_d2 {
             second_d2 = nearest_d2;
             nearest_d2 = d2;
             nx = dx;
             ny = dy;
-            nvx = rock.vx;
-            nvy = rock.vy;
-            nr = rock.r;
+            nvx = asteroid.vx;
+            nvy = asteroid.vy;
+            nr = asteroid.r;
         } else if d2 < second_d2 {
             second_d2 = d2;
         }
@@ -88,7 +88,7 @@ pub fn sense(agent: &Agent, asteroids: &[Asteroid]) -> [f64; nn::INPUTS] {
         // +1 is "hard right" and -1 is "hard left".
         inputs[12] = crate::math::wrap_angle(ny.atan2(nx) - ship.heading) / std::f64::consts::PI;
         inputs[13] = clamp(1.0 - d / sens::RANGE, 0.0, 1.0);
-        // d(dist)/dt: negative means the rock is closing.
+        // d(dist)/dt: negative means the asteroid is closing.
         let closing = (nx * (nvx - ship.vx) + ny * (nvy - ship.vy)) / d;
         inputs[14] = clamp(closing / sens::VEL_SCALE, -1.0, 1.0);
         // Tangential relative velocity: which way the threat crosses the nose.

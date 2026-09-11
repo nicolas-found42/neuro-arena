@@ -5,7 +5,7 @@ use sim::config::asteroid::Size;
 use sim::genome::{Connection, Genome, NodeId, NodeType};
 use sim::{Asteroid, Rng, World};
 
-/// A World with no rock field and no brain: tests add exactly the rocks they
+/// A World with no asteroid field and no network: tests add exactly the asteroids they
 /// mean to reason about.
 pub fn quiet_world(seed: u32) -> World {
     let mut world = World::new(Rng::from_seed(seed), None);
@@ -13,9 +13,9 @@ pub fn quiet_world(seed: u32) -> World {
     world
 }
 
-/// A stationary rock at `(x, y)`: shape and spin are drawn from a fixed seed so
+/// A stationary asteroid at `(x, y)`: shape and spin are drawn from a fixed seed so
 /// the scenario is identical every run.
-pub fn rock(size: Size, x: f64, y: f64) -> Asteroid {
+pub fn asteroid(size: Size, x: f64, y: f64) -> Asteroid {
     let mut rng = Rng::from_seed(0x5EED);
     let mut asteroid = Asteroid::new(size, x, y, 0.0, 0.0, &mut rng);
     asteroid.vx = 0.0;
@@ -25,8 +25,8 @@ pub fn rock(size: Size, x: f64, y: f64) -> Asteroid {
 }
 
 /// The same, with a velocity.
-pub fn moving_rock(size: Size, x: f64, y: f64, vx: f64, vy: f64) -> Asteroid {
-    let mut asteroid = rock(size, x, y);
+pub fn moving_asteroid(size: Size, x: f64, y: f64, vx: f64, vy: f64) -> Asteroid {
+    let mut asteroid = asteroid(size, x, y);
     asteroid.vx = vx;
     asteroid.vy = vy;
     asteroid

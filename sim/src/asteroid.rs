@@ -1,7 +1,7 @@
-//! Asteroid state, shape and rock-rock physics.
+//! Asteroid state, shape and asteroid-asteroid physics.
 //!
-//! Every rock is a jittered polygon: the vertex radii are drawn at creation and
-//! carried for the rock's life, so a split inherits a fresh shape rather than a
+//! Every asteroid is a jittered polygon: the vertex radii are drawn at creation and
+//! carried for the asteroid's life, so a split inherits a fresh shape rather than a
 //! scaled parent (a rule the old rendition also followed).
 
 use crate::config::asteroid::{self as ast, Size};
@@ -28,7 +28,7 @@ pub struct Asteroid {
 }
 
 impl Asteroid {
-    /// A rock of `size` at `(x, y)` moving along `dir` at `speed`.
+    /// An asteroid of `size` at `(x, y)` moving along `dir` at `speed`.
     ///
     /// Draw order is part of the stream contract: the shape radii, then the
     /// start angle, then the spin.
@@ -60,7 +60,7 @@ impl Asteroid {
     }
 
     /// Clamp to the global speed cap: momentum inheritance compounds through
-    /// splits, so a chain of hits could otherwise accelerate a rock without bound.
+    /// splits, so a chain of hits could otherwise accelerate a asteroid without bound.
     pub fn cap_speed(&mut self) {
         let sp = self.vx.hypot(self.vy);
         if sp > ast::SPEED_CAP {

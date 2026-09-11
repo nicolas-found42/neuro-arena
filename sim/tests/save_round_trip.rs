@@ -45,7 +45,7 @@ fn sample_file() -> GenomeFile {
         competence: Competence {
             alive_time: 214.3,
             wave: 4,
-            rocks: 63.0,
+            asteroids: 63.0,
         },
         genome,
     }

@@ -91,9 +91,9 @@ pub mod asteroid {
     pub const JITTER_MAX: f64 = 1.25;
     /// rad/s, uniform(-SPIN_MAX, SPIN_MAX), visual only
     pub const SPIN_MAX: f64 = 1.0;
-    /// Rocks in Wave 1; later Waves: ceil(prev * WAVE_GROWTH)
+    /// Asteroids in Wave 1; later Waves: ceil(prev * WAVE_GROWTH)
     pub const INITIAL_COUNT: usize = 5;
-    /// Wave rocks spawn at least this far (toroidally) from the Ship.
+    /// Wave asteroids spawn at least this far (toroidally) from the Ship.
     pub const INITIAL_MIN_DIST_FROM_SHIP: f64 = 150.0;
     /// Degrees off the parent direction.
     pub const SPLIT_ANGLE_MIN: f64 = 20.0;
@@ -102,7 +102,7 @@ pub mod asteroid {
     pub const SPLIT_IMPULSE_FACTOR: f64 = 0.5;
     /// Global speed cap (momentum inheritance compounds through splits).
     pub const SPEED_CAP: f64 = 160.0;
-    /// Rock-rock elasticity (1 = perfectly elastic).
+    /// Asteroid-asteroid elasticity (1 = perfectly elastic).
     pub const RESTITUTION: f64 = 1.0;
     pub const WAVE_GROWTH: f64 = 1.25;
 }

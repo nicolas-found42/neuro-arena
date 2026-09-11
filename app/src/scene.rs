@@ -20,7 +20,7 @@ use std::sync::LazyLock;
 
 use sim::Asteroid;
 use sim::config::asteroid::Size;
-use sim::config::{arena, asteroid as rock_cfg, bullet as bullet_cfg, sensors, ship as ship_cfg};
+use sim::config::{arena, asteroid as asteroid_cfg, bullet as bullet_cfg, sensors, ship as ship_cfg};
 use sim::world::{Bullet, Ship, World};
 
 use crate::painter::{Painter, Rgba, Transform};
@@ -167,7 +167,7 @@ pub fn draw_arena(painter: &mut Painter, world: &World, view: ArenaView, show_ra
 
     let agent = &world.agent;
     // The rays go down first: they are translucent, and reading them through
-    // the rocks is the point of the overlay.
+    // the asteroids is the point of the overlay.
     if show_rays {
         draw_rays(painter, &agent.ship, &agent.inputs);
     }
@@ -189,7 +189,7 @@ const EDGE_WIDTH: f32 = 2.0;
 
 /// The Arena's extent, drawn as a band of real thickness just inside the seam.
 fn draw_field_edge(painter: &mut Painter) {
-    let color = theme::color::ROCK_EDGE.alpha(0.20);
+    let color = theme::color::ASTEROID_EDGE.alpha(0.20);
     let (left, top) = (EDGE_INSET, EDGE_INSET);
     let (right, bottom) = (W - EDGE_INSET, H - EDGE_INSET);
     painter.rect(left, top, right - left, EDGE_WIDTH, color);
@@ -201,30 +201,30 @@ fn draw_field_edge(painter: &mut Painter) {
 // --------------------------------------------------------------- asteroids
 
 thread_local! {
-    /// One vertex buffer, reused by every rock in every frame:
+    /// One vertex buffer, reused by every asteroid in every frame:
     /// `Asteroid::vertices` insists on a `Vec`, and the field must not pay for
     /// a fresh one sixty times a second.
-    static ROCK_VERTICES: RefCell<Vec<(f64, f64)>> = const { RefCell::new(Vec::new()) };
+    static ASTEROID_VERTICES: RefCell<Vec<(f64, f64)>> = const { RefCell::new(Vec::new()) };
 }
 
-fn draw_asteroids(painter: &mut Painter, rocks: &[Asteroid]) {
-    ROCK_VERTICES.with(|cell| {
+fn draw_asteroids(painter: &mut Painter, asteroids: &[Asteroid]) {
+    ASTEROID_VERTICES.with(|cell| {
         let mut scratch = cell.borrow_mut();
-        for rock in rocks {
-            rock.vertices(&mut scratch);
-            let count = scratch.len().min(rock_cfg::VERTICES);
+        for asteroid in asteroids {
+            asteroid.vertices(&mut scratch);
+            let count = scratch.len().min(asteroid_cfg::VERTICES);
 
-            // Vertices relative to the rock's centre, so a Seam Copy is pure
+            // Vertices relative to the asteroid's centre, so a Seam Copy is pure
             // translation and nothing has to be recomputed per copy.
-            let mut relative = [[0.0f32; 2]; rock_cfg::VERTICES];
+            let mut relative = [[0.0f32; 2]; asteroid_cfg::VERTICES];
             for (slot, point) in relative.iter_mut().zip(scratch.iter()).take(count) {
-                *slot = [(point.0 - rock.x) as f32, (point.1 - rock.y) as f32];
+                *slot = [(point.0 - asteroid.x) as f32, (point.1 - asteroid.y) as f32];
             }
 
-            let fill = rock_fill(rock.size);
-            let edge = theme::color::ROCK_EDGE;
-            seam_copies(painter, rock.x, rock.y, rock.r, |painter, cx, cy| {
-                let mut points = [[0.0f32; 2]; rock_cfg::VERTICES];
+            let fill = asteroid_fill(asteroid.size);
+            let edge = theme::color::ASTEROID_EDGE;
+            seam_copies(painter, asteroid.x, asteroid.y, asteroid.r, |painter, cx, cy| {
+                let mut points = [[0.0f32; 2]; asteroid_cfg::VERTICES];
                 for (slot, point) in points.iter_mut().zip(relative.iter()).take(count) {
                     *slot = [point[0] + cx, point[1] + cy];
                 }
@@ -235,14 +235,14 @@ fn draw_asteroids(painter: &mut Painter, rocks: &[Asteroid]) {
     });
 }
 
-/// Rocks lighten as they shrink, so a Small reads apart from a Large at a
-/// glance — the difference matters most in the moment a rock splits.
-fn rock_fill(size: Size) -> Rgba {
-    let edge = theme::color::ROCK_EDGE;
+/// Asteroids lighten as they shrink, so a Small reads apart from a Large at a
+/// glance — the difference matters most in the moment an asteroid splits.
+fn asteroid_fill(size: Size) -> Rgba {
+    let edge = theme::color::ASTEROID_EDGE;
     match size {
-        Size::Large => theme::color::ROCK,
-        Size::Medium => theme::color::ROCK.mix(edge, 0.20),
-        Size::Small => theme::color::ROCK.mix(edge, 0.45),
+        Size::Large => theme::color::ASTEROID,
+        Size::Medium => theme::color::ASTEROID.mix(edge, 0.20),
+        Size::Small => theme::color::ASTEROID.mix(edge, 0.45),
     }
 }
 

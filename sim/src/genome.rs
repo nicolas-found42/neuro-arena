@@ -188,10 +188,6 @@ impl Genome {
         self.connections.insert(innovation, connection);
     }
 
-    pub fn deep_copy(&self) -> Self {
-        self.clone()
-    }
-
     /// Perturb and replace weights. Two draws per connection, in innovation
     /// order; a draw always happens whether or not the first one fired.
     pub fn mutate_weights(&mut self, rng: &mut Rng) {

@@ -22,8 +22,8 @@ pub mod color {
     pub const SHIP_FLAME: Rgba = Rgba::rgb(1.0, 0.702, 0.278);
     pub const SHIP_DEAD: Rgba = Rgba::rgb(0.545, 0.235, 0.235);
 
-    pub const ROCK: Rgba = Rgba::rgb(0.616, 0.643, 0.678);
-    pub const ROCK_EDGE: Rgba = Rgba::rgb(0.804, 0.827, 0.855);
+    pub const ASTEROID: Rgba = Rgba::rgb(0.616, 0.643, 0.678);
+    pub const ASTEROID_EDGE: Rgba = Rgba::rgb(0.804, 0.827, 0.855);
 
     pub const BULLET: Rgba = Rgba::rgb(1.0, 0.878, 0.400);
     pub const RAY: Rgba = Rgba::rgba(0.376, 0.816, 1.0, 0.30);
