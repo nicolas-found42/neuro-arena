@@ -1,0 +1,24 @@
+[package]
+name = "neuroarena-sim"
+description = "Windowless simulation core for NeuroArena: World, Genome, Network, Population, evolution."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "sim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "neuroarena-headless"
+path = "src/bin/headless.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# `float_roundtrip` is load-bearing, not a nicety: without it a weight can come
+# back one ULP off, so a reloaded Genome would not be the Genome that was saved.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[lints.rust]
+unsafe_code = "forbid"

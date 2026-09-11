@@ -1,6 +1,6 @@
-# Neuroevolution Asteroids
+# NeuroArena
 
-Browser neuroevolution playground that evolves neural-network pilots to survive an Asteroids arena on GH Pages.
+Neuroevolution playground that evolves neural-network pilots to survive an Asteroids arena, as a native macOS application.
 
 ## Language
 
@@ -47,5 +47,3 @@ Browser neuroevolution playground that evolves neural-network pilots to survive 
 **HUD**: Overlay panel showing Generation, member index, time, Wave, and gate state. _Avoid_: stats, info bar
 
 **Chart**: Fitness-over-Generations sparkline. _Avoid_: graph
-
-**Arcade Sketch**: Locked Win98-bevel graphics variant with no runtime variant switcher. _Avoid_: theme, skin, arcade mode

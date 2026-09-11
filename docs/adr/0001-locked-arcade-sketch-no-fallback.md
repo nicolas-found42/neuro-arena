@@ -1,6 +1,6 @@
 # ADR 0001 — Locked Arcade Sketch — Win98 Bevel + Rough ESM Mandatory, No Vanilla Fallback
 
-- **Status:** Accepted — locked production (main), no fallback.
+- **Status:** Accepted — locked production (main), no fallback. Superseded by ADR 0004 (2026-09-11): the browser rendition is retired, and the CDN chrome has no Rust form.
 - **Date:** 2026-08-27
 
 ## Context
