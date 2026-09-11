@@ -116,9 +116,9 @@ structural term `(excess+disjoint)/size` and the weight term
 `DISTANCE_C3 · mean|Δw|`. Worst case per 50-Generation block, seed 2026:
 
 ```
-gen   1-500  maxNearest 0.516  maxStructural 0.073  maxWeight 0.511
-gen 151-500  maxNearest 0.601  maxStructural 0.139  maxWeight 0.488
-gen 301-500  maxNearest 0.633  maxStructural 0.120  maxWeight 0.538
+gen    1-50  maxNearest 0.516  maxStructural 0.073  maxWeight 0.511
+gen 151-200  maxNearest 0.601  maxStructural 0.139  maxWeight 0.488
+gen 301-350  maxNearest 0.633  maxStructural 0.120  maxWeight 0.538
 gen 451-500  maxNearest 0.581  maxStructural 0.115  maxWeight 0.500
 ```
 
