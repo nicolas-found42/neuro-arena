@@ -63,6 +63,7 @@ impl Trail {
     pub fn draw(&self, p: &mut Painter, view: ArenaView) {
         p.set_transform(view.transform());
         p.set_clip(Some([0.0, 0.0, arena::WIDTH as f32, arena::HEIGHT as f32]));
+        p.set_gain(crate::theme::light::TRAIL);
         for i in 1..self.points.len() {
             let a = self.points[i - 1].1;
             let b = self.points[i].1;
@@ -76,6 +77,7 @@ impl Trail {
             // Light, not matter: the trace tapers and brightens toward the Ship.
             crate::effects::light_stroke(p, a, b, 0.5 + age * 0.9, color::SHIP.alpha(age * 0.5));
         }
+        p.set_gain(1.0);
         p.set_clip(None);
     }
 }
@@ -154,7 +156,7 @@ pub fn draw_chrome(
             } else {
                 "PAUSED"
             },
-            color::SHIP_FLAME,
+            color::ENERGY,
             false,
         )
     } else if controls.watching {
@@ -172,7 +174,9 @@ pub fn draw_chrome(
     ];
     if evolving {
         p.circle(mark, STATUS_RADIUS, color::ACCENT, 12);
+        p.set_gain(crate::theme::light::LAMP);
         p.luminous_glow(mark, STATUS_RADIUS * 2.0, color::ACCENT.alpha(0.35));
+        p.set_gain(1.0);
     } else {
         status_ring(p, mark, STATUS_RADIUS, color::SHIP_FLAME);
     }

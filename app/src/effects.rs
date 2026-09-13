@@ -155,6 +155,7 @@ impl Effects {
         for born in &self.waves {
             let age = self.age(*born, WAVE_LIFE);
             let strength = (1.0 - age).powi(2) * 0.25;
+            p.set_gain(crate::theme::light::WAVE);
             for (a, b, inward) in [
                 ([0.0, 0.0], [W, 0.0], [0.0, 1.0]),
                 ([0.0, H], [W, H], [0.0, -1.0]),
@@ -163,6 +164,7 @@ impl Effects {
             ] {
                 edge_strip(p, a, b, inward, color::ACCENT, strength);
             }
+            p.set_gain(1.0);
         }
     }
 
@@ -179,12 +181,15 @@ impl Effects {
         let seed = spark_seed(impact.x, impact.y, born);
         let at = [impact.x as f32, impact.y as f32];
         seam_copies(p, at, ring + STREAK_MAX, |p, c| {
+            p.set_gain(crate::theme::light::IMPACT);
             p.luminous_glow(c, 9.0 + age * 17.0, color::LIGHT_IMPACT.alpha(fade * 0.95));
+            p.set_gain(1.0);
             p.path(
                 &vector::arc(c, ring, 0.0, std::f32::consts::TAU),
                 1.6,
                 ink.alpha((1.0 - age) * 0.55),
             );
+            p.set_gain(crate::theme::light::SPARK);
             // The same fan in every seam copy: one event, translated.
             let mut seed = seed;
             let count = 6 + (lcg_unit(&mut seed) * 5.0) as usize;
@@ -199,6 +204,7 @@ impl Effects {
                 };
                 streak_at(p, c, angle, length, streak.alpha((1.0 - age).powf(1.5)));
             }
+            p.set_gain(1.0);
         });
     }
 
@@ -211,7 +217,9 @@ impl Effects {
         let seed = spark_seed(at[0], at[1], born);
         let at = [at[0] as f32, at[1] as f32];
         seam_copies(p, at, 26.0 + STREAK_MAX, |p, c| {
+            p.set_gain(crate::theme::light::IMPACT);
             p.luminous_glow(c, 8.0 + age * 18.0, flash.alpha(fade * 0.7));
+            p.set_gain(crate::theme::light::SPARK);
             let mut seed = seed;
             let count = 12 + (lcg_unit(&mut seed) * 5.0) as usize;
             for i in 0..count {
@@ -221,6 +229,7 @@ impl Effects {
                 let ink = color::SHIP_DEAD.mix(color::SHIP_FLAME, lcg_unit(&mut seed));
                 streak_at(p, c, angle, length, ink.alpha(ember));
             }
+            p.set_gain(1.0);
         });
     }
 

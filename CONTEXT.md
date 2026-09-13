@@ -56,6 +56,14 @@ Neuroevolution playground that evolves neural-network pilots to survive an Aster
 
 **Chart**: Sparkline of the headline Competence per Generation — the Population's mean Waves, tie-broken by alive time. _Avoid_: graph, fitness chart
 
+**Deep Field**: The lit volume behind the Arena — the wash, the baked nebulae and the starfield the entities are drawn in front of. _Avoid_: background, void, backdrop image
+
+**Perception Corona**: The ring of nine arcs on the Ship's hull, one per Sensor Ray, dented inward in proportion to that ray's reading. _Avoid_: radar, sensor ring, HUD ring
+
+**Intent Ring**: The four gauges outside the Corona showing the Network's raw motor outputs against the action threshold, each where its request acts. _Avoid_: controls, action display, output ring
+
+**Light Gain**: How far past white an emitter is written. The frame is high dynamic range and the bloom threshold is white, so this is what separates a light from a bright shape. _Avoid_: brightness, intensity, emissive strength
+
 ### Program
 
 **Candidate**: A proposed change to the controller, judged by the paired-seed protocol; the default changes only when a Candidate clears the bar. _Avoid_: experiment, variant, arm

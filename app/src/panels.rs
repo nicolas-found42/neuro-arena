@@ -17,7 +17,7 @@ use sim::config::nn;
 use sim::{Competence, CompetenceGate, GenerationStats, Genome, Network, NodeType};
 
 use crate::painter::{Align, Painter, Rgba, Typeface};
-use crate::theme::{color, font, layout};
+use crate::theme::{self, color, font, layout};
 use crate::ui::{Controls, Hit, Layout, Rect, PANEL_PAD, TITLE_GAP, TITLE_H};
 
 /// A character's width in the monospace face the text renderer shapes with.
@@ -28,6 +28,39 @@ const LIT: Rgba = Rgba::rgb(1.0, 1.0, 1.0);
 
 /// The gap between the Network panel's three columns.
 const COLUMN_GAP: f32 = 10.0;
+
+/// How strong a weighted signal has to be before the path carrying it is lit
+/// rather than merely drawn. Magnitude of `activation × weight`, which is the
+/// same quantity the ranking uses.
+const SIGNAL_LIT: f32 = 0.35;
+
+/// Where each input sits in the Arena's own colour language: the nine Sensor
+/// Rays are perception, the threat telemetry is energy, and the Agent's own
+/// internal channels — bias, guns, memory — are neither.
+const INPUT_ROLES: [InputRole; 21] = {
+    use InputRole::{Internal, Sense, Threat};
+    [
+        Sense, Sense, Sense, Sense, Sense, Sense, Sense, Sense, Sense, Threat, Threat, Internal,
+        Threat, Threat, Threat, Internal, Threat, Threat, Threat, Threat, Internal,
+    ]
+};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputRole {
+    Sense,
+    Threat,
+    Internal,
+}
+
+impl InputRole {
+    fn ink(self) -> Rgba {
+        match self {
+            InputRole::Sense => color::ACCENT,
+            InputRole::Threat => color::ENERGY,
+            InputRole::Internal => color::NODE_INPUT,
+        }
+    }
+}
 
 /// Hidden nodes the Network panel draws before summarizing the rest.
 const HIDDEN_MAX_DRAWN: usize = 12;
@@ -300,6 +333,15 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         (body.h - axis_h).max(0.0),
     );
     painter.rect(plot.x, plot.y, plot.w, plot.h, color::FIELD);
+    // The plot is cut into the housing, like the meters: a shadow along its
+    // top lip is what says "inset" rather than "printed on".
+    painter.rect(
+        plot.x + 1.0,
+        plot.y + 1.0,
+        (plot.w - 2.0).max(0.0),
+        1.0,
+        color::VIGNETTE.alpha(0.7),
+    );
     for fraction in [0.25, 0.5, 0.75] {
         let y = plot.bottom() - plot.h * fraction;
         painter.line(
@@ -410,11 +452,13 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         waves(history[newest_index].mean_wave),
     );
     painter.circle([x_at(newest_index) - 1.0, newest_y], 2.0, color::ACCENT, 10);
+    painter.set_gain(theme::light::LAMP);
     painter.luminous_glow(
         [x_at(newest_index) - 1.0, newest_y],
         5.0,
         color::ACCENT.alpha(0.5),
     );
+    painter.set_gain(1.0);
 
     // The legend, in the corner the newest value does not claim.
     let legend_y = plot.y + 3.0;
@@ -517,13 +561,26 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
         let ink = if contribution >= 0.0 {
             color::ACCENT
         } else {
-            color::SHIP_FLAME
+            color::ENERGY
         };
+        let path = crate::vector::connection(a, b, contribution < 0.0);
         painter.path(
-            &crate::vector::connection(a, b, contribution < 0.0),
+            &path,
             0.65 + activity * 1.15,
             ink.alpha(0.12 + activity * 0.45),
         );
+        // A strong signal carries light as well as width, so the paths that are
+        // actually doing the work separate from the ones that merely exist.
+        // The threshold and the brightness are both |activation × weight|.
+        if activity > SIGNAL_LIT {
+            painter.set_gain(theme::light::SIGNAL);
+            painter.path(
+                &path,
+                0.5 + activity * 0.6,
+                ink.alpha((activity - SIGNAL_LIT) * 0.5),
+            );
+            painter.set_gain(1.0);
+        }
     }
 
     const INPUT_NAMES: [&str; 21] = [
@@ -543,18 +600,28 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
             break;
         }
         let lit = network.activation(*id).abs().clamp(0.0, 1.0) as f32;
+        let role = INPUT_ROLES
+            .get(rank)
+            .copied()
+            .unwrap_or(InputRole::Internal);
         if columns.input_step >= 10.0 {
             painter.text(
                 [columns.inputs.x, columns.input_dot(rank)[1] - 5.0],
                 8.0,
-                color::TEXT_DIM,
+                if lit > SIGNAL_LIT {
+                    color::TEXT
+                } else {
+                    color::TEXT_FAINT
+                },
                 INPUT_NAMES.get(rank).copied().unwrap_or("input"),
             );
         }
-        painter.circle(
+        node(
+            painter,
             columns.input_dot(rank),
             input_radius,
-            color::NODE_INPUT.mix(LIT, lit),
+            role.ink(),
+            lit,
             8,
         );
     }
@@ -571,10 +638,12 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
             break;
         }
         let lit = network.activation(*id).abs().clamp(0.0, 1.0) as f32;
-        painter.circle(
+        node(
+            painter,
             columns.hidden_dot(rank),
             hidden_radius,
-            color::NODE_HIDDEN.mix(LIT, lit),
+            color::NODE_HIDDEN,
+            lit,
             10,
         );
     }
@@ -678,6 +747,21 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
         Align::Right,
         format!("{} out", network.output_ids().len()),
     );
+}
+
+/// One node in the Network panel: its own colour, climbing toward white as it
+/// fires, and a halo once it is firing hard enough to matter. `lit` is the
+/// absolute activation the Network last produced, nothing else.
+fn node(painter: &mut Painter, at: [f32; 2], radius: f32, base: Rgba, lit: f32, segments: usize) {
+    if radius <= 0.0 {
+        return;
+    }
+    painter.circle(at, radius, base.mix(LIT, lit), segments);
+    if lit > SIGNAL_LIT {
+        painter.set_gain(theme::light::SIGNAL);
+        painter.luminous_glow(at, radius * 3.2, base.alpha((lit - SIGNAL_LIT) * 0.6));
+        painter.set_gain(1.0);
+    }
 }
 
 /// Two incoming signals per target, ranked by |activation × weight|.
@@ -897,14 +981,17 @@ pub fn draw_controls(
         } else {
             color::PANEL_BORDER
         };
-        painter.panel(
-            field.x,
-            field.y,
-            field.w,
-            field.h,
-            color::FIELD,
-            Some(border),
+        // A field is cut into the housing rather than standing on it: flat
+        // fill, a shadow along its top lip, then its border.
+        painter.rect(field.x, field.y, field.w, field.h, color::FIELD);
+        painter.rect(
+            field.x + 1.0,
+            field.y + 1.0,
+            (field.w - 2.0).max(0.0),
+            1.0,
+            color::VIGNETTE.alpha(0.7),
         );
+        painter.rect_outline(field.x, field.y, field.w, field.h, border);
         let text_x = field.x + PANEL_PAD - 2.0;
         let text_y = line_y(field.y, field.h, font::BODY);
         if controls.seed_text.is_empty() {
@@ -962,11 +1049,13 @@ pub fn draw_controls(
             THUMB_H,
             color::ACCENT,
         );
+        painter.set_gain(theme::light::LAMP);
         painter.luminous_glow(
             [thumb_x, bar.center()[1]],
             THUMB_GLOW,
             color::ACCENT.alpha(0.3),
         );
+        painter.set_gain(1.0);
         let unbounded = Controls::is_unbounded(controls.speed);
         painter.text_aligned(
             [
@@ -987,14 +1076,7 @@ pub fn draw_controls(
 
 /// The status line under the strip: what the app is doing, or what went wrong.
 pub fn draw_status(painter: &mut Painter, rect: Rect, status: &str, is_error: bool) {
-    painter.panel(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        color::PANEL_BG,
-        Some(color::PANEL_BORDER),
-    );
+    lit_surface(painter, rect, color::PANEL_BG, Some(color::PANEL_BORDER));
     painter.rect(
         rect.x,
         rect.y,
@@ -1114,19 +1196,49 @@ pub fn draw_banner(painter: &mut Painter, arena: Rect, lines: &[(String, Rgba)])
     }
 }
 
+/// How far down a surface the key light reaches, as a fraction of its height.
+const SURFACE_FALLOFF: f32 = 0.62;
+/// The hairline where the key light catches a surface's top edge.
+const SURFACE_EDGE_ALPHA: f32 = 0.5;
+
+/// A lit surface: the key light grazes the top edge and falls away down the
+/// face, with a hairline where it catches. Every panel, key and field is drawn
+/// with this, so the sidebar reads as one piece of hardware lit from the same
+/// place as the Arena rather than as a stack of flat boxes.
+pub(crate) fn lit_surface(painter: &mut Painter, rect: Rect, base: Rgba, border: Option<Rgba>) {
+    if rect.w <= 0.0 || rect.h <= 0.0 {
+        return;
+    }
+    let top = theme::lit(base);
+    let knee = (rect.y + rect.h * SURFACE_FALLOFF).min(rect.bottom());
+    painter.gradient_polygon(
+        &[
+            [rect.x, rect.y],
+            [rect.right(), rect.y],
+            [rect.right(), knee],
+            [rect.x, knee],
+        ],
+        &[top, top, base, base],
+    );
+    painter.rect(rect.x, knee, rect.w, rect.bottom() - knee, base);
+    painter.rect(
+        rect.x,
+        rect.y,
+        rect.w,
+        1.0,
+        color::PANEL_EDGE.alpha(SURFACE_EDGE_ALPHA),
+    );
+    if let Some(border) = border {
+        painter.rect_outline(rect.x, rect.y, rect.w, rect.h, border);
+    }
+}
+
 /// The panel body: `PANEL_BG` inside a `PANEL_BORDER` outline, with a
 /// `PANEL_TITLE` heading and the chrome every panel wears — a section tick, a
 /// heading rule that fades out to the right, and corner brackets. Returns the
 /// body's inner rect, below the heading.
 fn frame(painter: &mut Painter, rect: Rect, title: &str) -> Rect {
-    painter.panel(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        color::PANEL_BG,
-        Some(color::PANEL_BORDER),
-    );
+    lit_surface(painter, rect, color::PANEL_BG, Some(color::PANEL_BORDER));
     painter.rect(
         rect.x,
         rect.y,
@@ -1299,27 +1411,20 @@ fn button(painter: &mut Painter, rect: Rect, label: &str, state: State, hot: boo
         // Not available, but still readable: it says what the strip can do.
         color::TEXT_DIM.alpha(0.6)
     };
-    painter.panel(
-        rect.x,
-        rect.y,
-        rect.w,
-        rect.h,
-        fill,
-        Some(color::PANEL_BORDER.alpha(0.7)),
-    );
-    // The key light grazes every key's top edge, so the row reads as hardware
-    // rather than as a row of flat boxes.
-    painter.rect(
-        rect.x + 1.0,
-        rect.y + 1.0,
-        (rect.w - 2.0).max(0.0),
-        1.0,
-        LIT.alpha(0.05),
-    );
+    let border = if hot {
+        color::ACCENT.alpha(0.55)
+    } else if state == State::Dim {
+        color::PANEL_BORDER.alpha(0.45)
+    } else {
+        color::PANEL_BORDER.alpha(0.85)
+    };
+    lit_surface(painter, rect, fill, Some(border));
     if state == State::On {
+        // A lit key says so twice: colour, and a bar along its foot, so the
+        // state survives without the colour being read.
         painter.rect(
             rect.x + 3.0,
-            rect.bottom() - 5.0,
+            rect.bottom() - 4.0,
             (rect.w - 6.0).max(0.0),
             2.0,
             color::ACCENT,
@@ -1418,10 +1523,8 @@ mod tests {
         assert_eq!(faded(ink, 2.0).a, 0.5);
         assert_eq!(faded(ink, -1.0).a, 0.0);
         // Colour is untouched: only the alpha rides the fade.
-        assert_eq!(
-            faded(color::TEXT, 0.5).to_array(),
-            [0.902, 0.914, 0.929, 0.5]
-        );
+        let text = color::TEXT;
+        assert_eq!(faded(text, 0.5).to_array(), [text.r, text.g, text.b, 0.5]);
     }
 
     #[test]

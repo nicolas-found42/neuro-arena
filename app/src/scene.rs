@@ -8,14 +8,18 @@
 //! Facets preserve the simulation polygons; all illumination is cosmetic.
 //! Strokes have logical thickness and geometry is clipped at the toroidal seam.
 //!
-//! The presentation is a deep field, not a flat void. Behind the field sit a
-//! cool vertical wash, three nebulae and a three-layer starfield; a vignette
-//! closes the frame; and the containment seam is drawn as a hairline of light.
+//! The presentation is a deep field, not a flat void. The field itself — the
+//! wash, the nebulae and the frame's own falloff — is painted by the backdrop
+//! shader from one baked density texture (`deepfield`), so what is drawn here
+//! is only what the simulation put in it: the starfield laid over the field,
+//! the measuring grid, the containment seam, and the entities.
+//!
 //! Asteroids and the Ship's hull are materials, lit by one key light from the
-//! upper left, and everything that emits — the thrust plume, bullet tracers,
-//! the seam hairline — goes into the Painter's additive buffer, where it
-//! accumulates like light instead of covering matter like paint. Every colour
-//! and every shade below is presentation: nothing here feeds the World.
+//! upper left. Everything that emits — the thrust plume, bullet tracers, the
+//! seam hairline, the perception corona — goes into the Painter's additive
+//! buffer at a gain from `theme::light`, which writes it past white so the
+//! bloom chain turns it into an actual light source. Every colour and every
+//! shade below is presentation: nothing here feeds the World.
 //!
 //! The field is toroidal, so an entity near an edge is drawn again across the
 //! seam: one copy for each edge it laps, up to four in a corner. That is the
@@ -240,13 +244,10 @@ pub fn draw_arena(
     painter.set_transform(view.transform());
 
     painter.set_clip(Some([0.0, 0.0, W, H]));
-    painter.rect(0.0, 0.0, W, H, theme::color::ARENA_BG);
-    // Back to front: the deep field, the frame's own falloff, the instrument
-    // grid, then the containment seam.
-    draw_wash(painter);
-    draw_nebulae(painter);
+    // The wash, the nebulae and the frame's falloff are already on the target:
+    // the backdrop shader painted them before any of this was submitted. What
+    // is left is what sits *in* the field — its sky, its measure, its edge.
     draw_stars(painter);
-    draw_vignette(painter);
     draw_grid(painter);
     draw_field_edge(painter);
 
@@ -266,6 +267,15 @@ pub fn draw_arena(
         world.time,
         motion,
     );
+    // What the Agent senses and what it asks for, worn on the hull. Both come
+    // from the step the World has already taken, so a paused frame shows the
+    // reading the Network was actually given and the request it actually made.
+    if agent.alive && world.time > 0.0 {
+        draw_corona(painter, &agent.ship, &agent.inputs);
+        if let Some(network) = agent.network() {
+            draw_intent(painter, &agent.ship, network);
+        }
+    }
     draw_tracking(painter, world);
     painter.set_clip(None);
 }
@@ -328,136 +338,6 @@ fn draw_stars(painter: &mut Painter) {
     }
 }
 
-// ---------------------------------------------------------------- backdrop
-
-/// The cool wash over the field: the upper air catches a little more of the
-/// deep field's light and the floor settles a shade deeper than the Arena's own
-/// background. Both are barely there — the wash may not cost the grid, the
-/// stars or the text any contrast.
-const WASH_TOP_ALPHA: f32 = 0.10;
-const WASH_HORIZON_ALPHA: f32 = 0.045;
-const WASH_FLOOR_ALPHA: f32 = 0.12;
-const WASH_TINT: f32 = 0.18;
-/// Where the wash turns over, as a fraction of the Arena's height.
-const WASH_HORIZON: f32 = 0.55;
-
-/// The wash colour: the field's own background, lifted toward the deep field's
-/// teal.
-fn wash_ink(alpha: f32) -> Rgba {
-    theme::color::ARENA_BG
-        .mix(theme::color::NEBULA_B, WASH_TINT)
-        .alpha(alpha)
-}
-
-/// Two quads spanning the Arena: the upper air lifted, the floor deepened. They
-/// meet at the horizon on the same colour, so there is no seam between them.
-fn draw_wash(painter: &mut Painter) {
-    let horizon = H * WASH_HORIZON;
-    let top = wash_ink(WASH_TOP_ALPHA);
-    let mid = wash_ink(WASH_HORIZON_ALPHA);
-    painter.gradient_polygon(
-        &[[0.0, 0.0], [W, 0.0], [W, horizon], [0.0, horizon]],
-        &[top, top, mid, mid],
-    );
-    let deep = theme::color::VIGNETTE.alpha(WASH_FLOOR_ALPHA);
-    painter.gradient_polygon(
-        &[[0.0, horizon], [W, horizon], [W, H], [0.0, H]],
-        &[mid, mid, deep, deep],
-    );
-}
-
-/// A nebula: distant light the field is standing in front of.
-#[derive(Clone, Copy, Debug)]
-struct Nebula {
-    center: [f32; 2],
-    radius: f32,
-    color: Rgba,
-}
-
-/// Three nebulae, laid out once with the sky. Each one draws its centre from
-/// its own region of the Arena — left, upper right, lower right — so the
-/// deep field is spread rather than stacked, and no nebula's core lands on the
-/// upper-centre floor the golden frame samples as empty.
-const NEBULA_COUNT: usize = 3;
-const NEBULA_SEED: u32 = 0x5EED_0B1E;
-/// Left, upper right, lower right, as fractions of the Arena: `x0, y0, x1, y1`.
-const NEBULA_REGIONS: [[f32; 4]; NEBULA_COUNT] = [
-    [0.08, 0.40, 0.40, 0.85],
-    [0.62, 0.10, 0.88, 0.28],
-    [0.55, 0.50, 0.85, 0.85],
-];
-const NEBULA_COLORS: [Rgba; NEBULA_COUNT] = [
-    theme::color::NEBULA_A,
-    theme::color::NEBULA_B,
-    theme::color::NEBULA_A,
-];
-const NEBULA_MIN_RADIUS: f32 = 240.0;
-const NEBULA_RADIUS_RANGE: f32 = 120.0;
-const NEBULA_MIN_ALPHA: f32 = 0.04;
-const NEBULA_ALPHA_RANGE: f32 = 0.03;
-
-static NEBULAE: LazyLock<Vec<Nebula>> = LazyLock::new(build_nebulae);
-
-/// Lay out the nebulae from [`NEBULA_SEED`], one per region, using the same
-/// reproducible generator as the starfield. Static for the life of the
-/// process: the deep field is a place, and a place does not drift.
-fn build_nebulae() -> Vec<Nebula> {
-    let mut seed = NEBULA_SEED;
-    let mut field = Vec::with_capacity(NEBULA_COUNT);
-    for (index, region) in NEBULA_REGIONS.iter().enumerate() {
-        let mut pick = |span: [f32; 2]| span[0] + lcg_unit(&mut seed) * (span[1] - span[0]);
-        let center = [
-            pick([region[0] * W, region[2] * W]),
-            pick([region[1] * H, region[3] * H]),
-        ];
-        let radius = NEBULA_MIN_RADIUS + lcg_unit(&mut seed) * NEBULA_RADIUS_RANGE;
-        let alpha = NEBULA_MIN_ALPHA + lcg_unit(&mut seed) * NEBULA_ALPHA_RANGE;
-        field.push(Nebula {
-            center,
-            radius,
-            color: NEBULA_COLORS[index].alpha(alpha),
-        });
-    }
-    field
-}
-
-/// The nebulae are light, so they go into the additive buffer: three very dim
-/// glows wide enough to be a sky rather than a lamp.
-fn draw_nebulae(painter: &mut Painter) {
-    for nebula in NEBULAE.iter() {
-        painter.luminous_glow(nebula.center, nebula.radius, nebula.color);
-    }
-}
-
-/// The frame's own falloff. The Arena's edges sit deeper than its middle, which
-/// is what makes the field read as a lit volume rather than a flat panel.
-const VIGNETTE_DEPTH: f32 = 130.0;
-const VIGNETTE_ALPHA: f32 = 0.35;
-
-/// Four edge quads, transparent at the inside and [`VIGNETTE_ALPHA`] at the
-/// seam. Corners take two of them, so they deepen twice.
-fn draw_vignette(painter: &mut Painter) {
-    let deep = theme::color::VIGNETTE.alpha(VIGNETTE_ALPHA);
-    let clear = theme::color::VIGNETTE.alpha(0.0);
-    let depth = VIGNETTE_DEPTH;
-    painter.gradient_polygon(
-        &[[0.0, 0.0], [W, 0.0], [W, depth], [0.0, depth]],
-        &[deep, deep, clear, clear],
-    );
-    painter.gradient_polygon(
-        &[[0.0, H], [W, H], [W, H - depth], [0.0, H - depth]],
-        &[deep, deep, clear, clear],
-    );
-    painter.gradient_polygon(
-        &[[0.0, 0.0], [depth, 0.0], [depth, H], [0.0, H]],
-        &[deep, clear, clear, deep],
-    );
-    painter.gradient_polygon(
-        &[[W, 0.0], [W, H], [W - depth, H], [W - depth, 0.0]],
-        &[deep, deep, clear, clear],
-    );
-}
-
 /// How far inside the seam the field's edge band sits, and how thick it is.
 /// Both are logical units that scale with the window, so the band stays a band.
 const EDGE_INSET: f32 = 2.0;
@@ -513,6 +393,7 @@ fn draw_field_edge(painter: &mut Painter) {
     // The seam's own light, inside the band: a hairline where the field stops,
     // and a shallow glow that settles the Arena into its containment. Static —
     // containment is a property of the field, not an event.
+    painter.set_gain(theme::light::SEAM);
     let left = EDGE_INSET + EDGE_WIDTH;
     let top = EDGE_INSET + EDGE_WIDTH;
     let right = W - left;
@@ -552,6 +433,7 @@ fn draw_field_edge(painter: &mut Painter) {
         luminous_rect(painter, left, top, depth, span_y, ink);
         luminous_rect(painter, right - depth, top, depth, span_y, ink);
     }
+    painter.set_gain(1.0);
 }
 
 // --------------------------------------------------------------- asteroids
@@ -572,27 +454,49 @@ const KEY_LIGHT: [f32; 2] = [
 
 /// How much of the key light a facet whose outward direction (a unit vector
 /// from the asteroid's centre) faces, mapped from the dot product into
-/// `ASTEROID_MIN_SHADE ..= 1.0`. The floor keeps the unlit side readable as
-/// material rather than letting it fall into the background.
-const ASTEROID_MIN_SHADE: f32 = 0.15;
+/// `ASTEROID_MIN_SHADE ..= 1.0`. The floor is nearly nothing: what keeps the
+/// dark side readable is the ambient the deep field puts back, not a floor on
+/// the key light.
+const ASTEROID_MIN_SHADE: f32 = 0.04;
 
-/// The rock's mid-tone shade: the middle of the unlit/lit pair, which is what
-/// `ASTEROID` itself is authored as. The interior of a facet never goes below
-/// it, so a rock's middle keeps the brightness the flat fill had.
-const ASTEROID_MID_SHADE: f32 = 0.5;
+/// How sharply the terminator falls. Above one, the lit side holds its value
+/// further around the body and then drops away quickly, which is what makes a
+/// rock read as a sphere of mass rather than a disc with a gradient on it.
+const ASTEROID_TERMINATOR: f32 = 1.8;
+
+/// What the deep field itself puts back on the unlit side. Nothing in space is
+/// lit from one direction only, and a rock that falls to black stops being an
+/// object and becomes a hole.
+const ASTEROID_AMBIENT: f32 = 0.16;
+
+/// The shade at the rock's own middle, where every facet meets. Just past the
+/// terminator's midpoint, so the body reads as turning away from the light
+/// rather than as a flat disc with a bright edge.
+const ASTEROID_CORE_SHADE: f32 = 0.55;
 
 /// The widest angle a facet may face the key light from and still catch its
-/// rim, as a cosine. Ten facets are 36° apart, so this lights one or two.
+/// rim, as a cosine. Ten facets are 36 degrees apart, so this lights one or two.
 const RIM_CONE: f32 = 0.866;
 
+/// And the opposite cone: the facets turned away from the key light catch the
+/// field behind them instead. That cool back edge is what lifts a rock off the
+/// deep field it is floating in.
+const BACK_CONE: f32 = -0.5;
+
 /// The rim's brightness against the facet edges that only draw the silhouette.
-const RIM_ALPHA: f32 = 0.5;
-const FACET_EDGE_ALPHA: f32 = 0.16;
+const RIM_ALPHA: f32 = 0.85;
+const BACK_ALPHA: f32 = 0.16;
+const FACET_EDGE_ALPHA: f32 = 0.10;
 
 /// The interior cracks are brighter where the key light falls: dim on the dark
 /// side, legible on the lit one.
-const CRACK_MIN_ALPHA: f32 = 0.10;
-const CRACK_ALPHA_RANGE: f32 = 0.12;
+const CRACK_MIN_ALPHA: f32 = 0.04;
+const CRACK_ALPHA_RANGE: f32 = 0.14;
+/// Three fractures per rock, each running from a little way out of the middle
+/// toward one of the rock's own vertices: the first pair is the radius it
+/// starts at in Arena units, the second the fraction of the vertex it reaches.
+const CRACK_COUNT: usize = 3;
+const CRACK_REACH: [[f32; 2]; CRACK_COUNT] = [[3.0, 0.72], [2.0, 0.55], [4.0, 0.80]];
 
 fn draw_asteroids(painter: &mut Painter, asteroids: &[Asteroid]) {
     ASTEROID_VERTICES.with(|cell| {
@@ -615,16 +519,35 @@ fn draw_asteroids(painter: &mut Painter, asteroids: &[Asteroid]) {
             for (slot, point) in vertex_ink.iter_mut().zip(relative.iter()).take(count) {
                 *slot = asteroid_ink(asteroid.size, unit(point[0], point[1]));
             }
-            let mut facet_middle = [theme::color::ASTEROID_UNLIT; asteroid_cfg::VERTICES];
-            let mut catches_rim = [false; asteroid_cfg::VERTICES];
+            // One colour at the rock's middle, shared by every facet. The fan
+            // meets there, so a per-facet middle would make the centre a
+            // pinwheel of ten hard wedges; one core turns the same fan into a
+            // body shaded smoothly from the middle out to the lit and unlit
+            // rims.
+            let core = asteroid_shaded(asteroid.size, ASTEROID_CORE_SHADE);
+            let mut facet_edge =
+                [theme::color::ASTEROID_EDGE.alpha(FACET_EDGE_ALPHA); asteroid_cfg::VERTICES];
             for index in 0..count {
                 let next = (index + 1) % count;
                 let facing = unit(
                     relative[index][0] + relative[next][0],
                     relative[index][1] + relative[next][1],
                 );
-                facet_middle[index] = asteroid_facet_ink(asteroid.size, facing);
-                catches_rim[index] = facing[0] * KEY_LIGHT[0] + facing[1] * KEY_LIGHT[1] > RIM_CONE;
+                // Three kinds of edge: the hot rim where the key light grazes
+                // the silhouette, the cool back edge where the deep field does,
+                // and the rest, which only has to describe the shape.
+                let toward = facing[0] * KEY_LIGHT[0] + facing[1] * KEY_LIGHT[1];
+                facet_edge[index] = if toward > RIM_CONE {
+                    theme::color::ASTEROID_RIM.alpha(RIM_ALPHA)
+                } else if toward < BACK_CONE {
+                    // Desaturated on purpose: a back edge is the field seen
+                    // past the rock, not a selection outline drawn on it.
+                    theme::color::ACCENT
+                        .mix(theme::color::STAR_BRIGHT, 0.55)
+                        .alpha(BACK_ALPHA)
+                } else {
+                    theme::color::ASTEROID_EDGE.alpha(FACET_EDGE_ALPHA)
+                };
             }
 
             let edge = theme::color::ASTEROID_EDGE;
@@ -647,40 +570,22 @@ fn draw_asteroids(painter: &mut Painter, asteroids: &[Asteroid]) {
                         let next = (index + 1) % count;
                         painter.gradient_polygon(
                             &[[cx, cy], points[index], points[next]],
-                            &[facet_middle[index], vertex_ink[index], vertex_ink[next]],
+                            &[core, vertex_ink[index], vertex_ink[next]],
                         );
                         // The facets that face the key light carry the rim.
-                        painter.stroke(
-                            points[index],
-                            points[next],
-                            1.2,
-                            edge.alpha(if catches_rim[index] {
-                                RIM_ALPHA
-                            } else {
-                                FACET_EDGE_ALPHA
-                            }),
-                        );
+                        painter.stroke(points[index], points[next], 1.2, facet_edge[index]);
                     }
-                    let r = asteroid.r as f32;
-                    // Two cracks, each inked by the light where it runs.
-                    let cracks = [
-                        (
-                            [cx - r * 0.24, cy - r * 0.2],
-                            [cx + r * 0.18, cy + r * 0.25],
-                        ),
-                        (
-                            [cx + r * 0.18, cy + r * 0.25],
-                            [cx + r * 0.38, cy - r * 0.12],
-                        ),
-                    ];
-                    for (from, to) in cracks {
-                        let lit = shade(
-                            unit((from[0] + to[0]) * 0.5 - cx, (from[1] + to[1]) * 0.5 - cy),
-                            KEY_LIGHT,
-                        );
+                    // Fractures run outward from the middle along the rock's
+                    // own vertices, so every rock's are its own, and each is
+                    // inked by the light where it runs.
+                    for step in 0..CRACK_COUNT {
+                        let vertex = relative[(step * 3 + 2) % count];
+                        let direction = unit(vertex[0], vertex[1]);
+                        let reach = CRACK_REACH[step];
+                        let lit = shade(direction, KEY_LIGHT);
                         painter.stroke(
-                            from,
-                            to,
+                            [cx + direction[0] * reach[0], cy + direction[1] * reach[0]],
+                            [cx + vertex[0] * reach[1], cy + vertex[1] * reach[1]],
                             0.7,
                             edge.alpha(CRACK_MIN_ALPHA + CRACK_ALPHA_RANGE * lit),
                         );
@@ -715,28 +620,25 @@ fn asteroid_ink(size: Size, direction: [f32; 2]) -> Rgba {
     asteroid_shaded(size, shade(direction, KEY_LIGHT))
 }
 
-/// The same material at an explicit shade.
+/// The same material at an explicit shade: the deep field's ambient sets the
+/// floor, the key light lifts it through a shaped terminator, and the size
+/// lighten rides on top of both.
 fn asteroid_shaded(size: Size, shade: f32) -> Rgba {
     theme::color::ASTEROID_UNLIT
-        .mix(theme::color::ASTEROID_LIT, shade)
-        .mix(theme::color::ASTEROID_EDGE, size_lighten(size))
-}
-
-/// A facet's interior ink: how much of the key light reaches the facet's own
-/// middle, held at or above the rock's mid-tone. The interior may brighten on
-/// the lit side, but it never falls below what the flat fill used to be.
-fn asteroid_facet_ink(size: Size, direction: [f32; 2]) -> Rgba {
-    asteroid_shaded(size, shade(direction, KEY_LIGHT).max(ASTEROID_MID_SHADE))
+        .mix(theme::color::WASH, ASTEROID_AMBIENT)
+        .mix(theme::color::ASTEROID_LIT, shade.powf(ASTEROID_TERMINATOR))
+        .mix(theme::color::ASTEROID_RIM, size_lighten(size))
 }
 
 /// Asteroids lighten as they shrink, so a Small reads apart from a Large at a
-/// glance — the difference matters most in the moment an asteroid splits. It is
-/// a mix toward the edge colour, applied under the key light.
+/// glance — the difference matters most in the moment an Asteroid splits. The
+/// mix is toward the rim's warm white rather than the cool edge, so a fresh
+/// fragment reads as hot stone and not as frosted glass.
 fn size_lighten(size: Size) -> f32 {
     match size {
         Size::Large => 0.0,
-        Size::Medium => 0.20,
-        Size::Small => 0.45,
+        Size::Medium => 0.12,
+        Size::Small => 0.28,
     }
 }
 
@@ -761,8 +663,8 @@ const FLAME_CORE_HALF: f32 = 0.26;
 const HULL_NOSE_LIFT: f32 = 0.45;
 /// The Ship's own light: a halo around the hull, and the glow the plume throws
 /// on the space just behind it.
-const SHIP_HALO_RADIUS: f32 = 26.0;
-const SHIP_HALO_ALPHA: f32 = 0.16;
+const SHIP_HALO_RADIUS: f32 = 19.0;
+const SHIP_HALO_ALPHA: f32 = 0.17;
 const FLAME_HALO_RADIUS: f32 = 10.0;
 const FLAME_HALO_ALPHA: f32 = 0.25;
 
@@ -780,6 +682,8 @@ const BULLET_HALO_ALPHA: f32 = 0.4;
 
 const RAY_TIP_RADIUS: f32 = 2.0;
 const RAY_TIP_SEGMENTS: usize = 6;
+const RAY_HALF_WIDTH: f32 = 0.9;
+const RAY_SEGMENTS: usize = 6;
 
 /// The plume's length scale at simulation time `time`. Flicker is motion: with
 /// motion off the plume is its authored length, so a paused frame — or a
@@ -827,13 +731,16 @@ fn draw_ship(
         ship_cfg::RADIUS * 4.0,
         |painter, cx, cy| {
             if alive {
+                painter.set_gain(theme::light::SHIP_HALO);
                 painter.luminous_glow([cx, cy], SHIP_HALO_RADIUS, body.alpha(SHIP_HALO_ALPHA));
+                painter.set_gain(1.0);
             }
             if alive && thrusting {
                 // The plume's anchor is the tail; only its length flickers.
                 let base = SHIP_TAIL * radius;
                 let outer = flame_length(FLAME_LENGTH * radius, time, motion);
                 let core = flame_length(FLAME_CORE_LENGTH * radius, time, motion);
+                painter.set_gain(theme::light::PLUME);
                 painter.luminous_glow(
                     place(base, 0.0, cx, cy),
                     FLAME_HALO_RADIUS,
@@ -845,12 +752,14 @@ fn draw_ship(
                     place(base - outer, 0.0, cx, cy),
                     flame_outer,
                 );
+                painter.set_gain(theme::light::PLUME_CORE);
                 painter.luminous_triangle(
                     place(base, -FLAME_CORE_HALF * radius, cx, cy),
                     place(base, FLAME_CORE_HALF * radius, cx, cy),
                     place(base - core, 0.0, cx, cy),
                     flame_core,
                 );
+                painter.set_gain(1.0);
             }
             // The hull is a material like the asteroids': the nose catches the
             // key light, the tail corners keep the hull's own colour.
@@ -923,6 +832,7 @@ fn draw_bullets(painter: &mut Painter, bullets: &[Bullet]) {
         seam_copies(painter, bullet.x, bullet.y, 24.0, |painter, cx, cy| {
             let dx = (bullet.vx as f32 * 0.025).clamp(-20.0, 20.0);
             let dy = (bullet.vy as f32 * 0.025).clamp(-20.0, 20.0);
+            painter.set_gain(theme::light::TRACER);
             luminous_streak(
                 painter,
                 [cx - dx, cy - dy],
@@ -932,52 +842,251 @@ fn draw_bullets(painter: &mut Painter, bullets: &[Bullet]) {
                 TRACER_SEGMENTS,
             );
             painter.luminous_glow([cx, cy], BULLET_HALO_RADIUS, color.alpha(BULLET_HALO_ALPHA));
-            painter.circle([cx, cy], BULLET_RADIUS, color, BULLET_SEGMENTS);
+            // The round itself is the light, not a dot painted the colour of
+            // one: it goes into the additive buffer, well past white.
+            painter.set_gain(theme::light::BULLET);
+            painter.luminous_circle([cx, cy], BULLET_RADIUS, color, BULLET_SEGMENTS);
+            painter.set_gain(1.0);
         });
     }
 }
 
-/// The nine Sensor Rays, from the Ship's nose outward.
+/// The nine Sensor Rays, drawn at the distance they actually measured.
 ///
 /// The frame is a proximity reading, not a distance: `inputs[k] == 1.0` is a
 /// hit at zero distance and `0.0` is nothing inside `sensors::RANGE`, so the
-/// length falls straight out of it. A ray that reaches full length has found
-/// nothing, which is why its far end carries a dot — otherwise a long ray and
-/// a ray stopped just short of the range limit would look alike.
+/// length falls straight out of it. A ray that found nothing has no distance to
+/// report and is drawn as a stub — the overlay is for reading what the Agent
+/// found, and nine full-range lines from one point is a starburst, not a
+/// reading.
 fn draw_rays(painter: &mut Painter, ship: &Ship, inputs: &[f64]) {
     // Inputs were sensed at the Ship centre. Draw exactly that sampled distance.
-    let nose = [ship.x as f32, ship.y as f32];
+    let origin = [ship.x as f32, ship.y as f32];
     for (index, offset_deg) in sensors::RAY_OFFSETS_DEG.iter().enumerate() {
-        let input = inputs.get(index).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-        let length = ((1.0 - input) * sensors::RANGE) as f32;
+        let input = inputs.get(index).copied().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+        // A ray that found nothing has no distance to report; the corona on
+        // the hull already marks its slot.
+        if input <= 0.0 {
+            continue;
+        }
+        let length = (1.0 - input) * sensors::RANGE as f32;
         let angle = ship.heading + offset_deg.to_radians();
         let far = [
-            nose[0] + angle.cos() as f32 * length,
-            nose[1] + angle.sin() as f32 * length,
+            origin[0] + angle.cos() as f32 * length,
+            origin[1] + angle.sin() as f32 * length,
         ];
-        let color = if input > 0.0 {
-            theme::color::SHIP_FLAME.alpha(0.18 + input as f32 * 0.32)
-        } else {
-            theme::color::RAY.alpha(0.03)
-        };
-        // Translate complete rays through the torus and clip, preserving seam intersections.
+        // Translate complete rays through the torus and clip, preserving seam
+        // intersections.
         for ox in [-W, 0.0, W] {
             for oy in [-H, 0.0, H] {
-                let a = [nose[0] + ox, nose[1] + oy];
+                let a = [origin[0] + ox, origin[1] + oy];
                 let b = [far[0] + ox, far[1] + oy];
-                painter.stroke(a, b, 0.8, color);
-                if input > 0.0 {
-                    painter.circle(
-                        b,
-                        RAY_TIP_RADIUS,
-                        theme::color::SHIP_FLAME,
-                        RAY_TIP_SEGMENTS,
-                    );
-                }
+                // Light that gathers toward what it found, so the eye goes to
+                // the reading rather than to the line carrying it.
+                painter.set_gain(theme::light::RAY);
+                luminous_streak(
+                    painter,
+                    a,
+                    b,
+                    RAY_HALF_WIDTH,
+                    theme::color::ENERGY.alpha(0.16 + input * 0.5),
+                    RAY_SEGMENTS,
+                );
+                painter.luminous_circle(b, RAY_TIP_RADIUS, theme::color::ENERGY, RAY_TIP_SEGMENTS);
+                painter.set_gain(1.0);
             }
         }
     }
 }
+
+// ------------------------------------------------------------------- mind
+//
+// The signature instrument: the Agent wears what it senses and what it asks
+// for, on its own hull, where the eye already is.
+//
+// Both rings are read straight out of the World. The corona is the sampled
+// Sensorium the Network was handed this step; the intent ring is the
+// activations the Network actually produced. Nothing here is smoothed,
+// extrapolated or invented — an empty corona means the Agent sensed nothing,
+// and a dark intent arc means it asked for nothing.
+
+/// The corona is a ring of nine arcs around the hull, one per Sensor Ray. An
+/// empty reading holds its arc at [`CORONA_FAR`]; a closing one pulls it in
+/// toward [`CORONA_NEAR`], so the ring dents inward where the Agent is under
+/// pressure. Both are in Ship radii.
+const CORONA_FAR: f32 = 3.4;
+const CORONA_NEAR: f32 = 1.6;
+/// Half the angular width of one ray's arc, in degrees. The nine rays are 40
+/// degrees apart, so this leaves a hairline of field between neighbours.
+const CORONA_HALF_ANGLE: f32 = 16.0;
+const CORONA_STEPS: usize = 6;
+const CORONA_WIDTH: f32 = 1.6;
+/// How far a reading's arc carries a tick back toward the hull, pointing at
+/// what it found — direction, without colour having to carry it.
+const CORONA_TICK: f32 = 3.0;
+
+/// The intent ring: four arcs outside the corona, one per motor request, each
+/// sitting where the request acts — fire at the nose, thrust at the tail, the
+/// turns to port and starboard.
+const INTENT_RADIUS: f32 = 4.6;
+const INTENT_HALF_ANGLE: f32 = 24.0;
+const INTENT_WIDTH: f32 = 2.2;
+const INTENT_STEPS: usize = 10;
+/// Coverage of a lit intent arc. Below one so the gain lifts it past white
+/// without burning its hue out of it.
+const INTENT_LIT_ALPHA: f32 = 0.72;
+/// Degrees from the heading, in `Network::output_ids` order: left, right,
+/// thrust, fire. Screen y runs down, so starboard is the positive turn.
+const INTENT_BEARINGS: [f32; 4] = [-90.0, 90.0, 180.0, 0.0];
+
+/// What the Agent senses, as a ring of nine arcs around its hull: the arc for a
+/// ray that found nothing sits out at the ring's rest radius, and one that
+/// found something is pulled in toward the hull in proportion to how close it
+/// is. It is the same mapping as the bench dial in the strip below the Arena,
+/// so the two read as one instrument in two places.
+fn draw_corona(painter: &mut Painter, ship: &Ship, inputs: &[f64]) {
+    let radius = ship_cfg::RADIUS as f32;
+    let reach = f64::from(CORONA_FAR * radius) + 2.0;
+    seam_copies(painter, ship.x, ship.y, reach, |painter, cx, cy| {
+        for (index, offset_deg) in sensors::RAY_OFFSETS_DEG.iter().enumerate() {
+            let value = inputs.get(index).copied().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+            let ring = (CORONA_FAR - (CORONA_FAR - CORONA_NEAR) * value) * radius;
+            let middle = ship.heading as f32 + offset_deg.to_radians() as f32;
+            let half = CORONA_HALF_ANGLE.to_radians();
+            let at = |t: f32, r: f32| {
+                let angle = middle - half + 2.0 * half * t;
+                [cx + angle.cos() * r, cy + angle.sin() * r]
+            };
+            let arc: Vec<[f32; 2]> = (0..=CORONA_STEPS)
+                .map(|step| at(step as f32 / CORONA_STEPS as f32, ring))
+                .collect();
+            if value <= 0.0 {
+                // A slot that found nothing still says so, out at rest.
+                for pair in arc.windows(2) {
+                    painter.stroke(
+                        pair[0],
+                        pair[1],
+                        CORONA_WIDTH * 0.7,
+                        theme::color::ACCENT.alpha(0.16),
+                    );
+                }
+                continue;
+            }
+            // Cyan is perception; the closer the reading, the further it runs
+            // toward the amber the Arena uses for danger.
+            let ink = crate::instruments::proximity_ink(value);
+            painter.set_gain(theme::light::CORONA);
+            for pair in arc.windows(2) {
+                crate::effects::light_stroke(
+                    painter,
+                    pair[0],
+                    pair[1],
+                    CORONA_WIDTH,
+                    ink.alpha(0.30 + value * 0.45),
+                );
+            }
+            // A tick inward from the middle of the arc: the reading has a
+            // direction, and it is readable without the colour.
+            let inner = at(0.5, ring - CORONA_TICK);
+            crate::effects::light_stroke(
+                painter,
+                at(0.5, ring),
+                inner,
+                CORONA_WIDTH * 0.8,
+                ink.alpha(0.25 + value * 0.4),
+            );
+            painter.set_gain(1.0);
+        }
+    });
+}
+
+/// What the Agent is asking for, as four gauges on the hull. Each arc is a
+/// track with a filled part: the fill is the raw output mapped from `-1..1`
+/// onto the arc, and the tick is `nn::ACTION_THRESHOLD`, the value the
+/// simulation actually compares against. An arc past its tick is lit.
+fn draw_intent(painter: &mut Painter, ship: &Ship, network: &sim::Network) {
+    let radius = ship_cfg::RADIUS as f32;
+    let ring = INTENT_RADIUS * radius;
+    let outputs = network.output_ids();
+    seam_copies(
+        painter,
+        ship.x,
+        ship.y,
+        f64::from(ring) + 4.0,
+        |painter, cx, cy| {
+            for (slot, bearing) in INTENT_BEARINGS.iter().enumerate() {
+                let value = network.activation(outputs[slot]) as f32;
+                // tanh output onto the arc: -1 is the empty end, +1 the full one.
+                let filled = ((value + 1.0) * 0.5).clamp(0.0, 1.0);
+                let requested = value > sim::config::nn::ACTION_THRESHOLD as f32;
+                let middle = ship.heading as f32 + bearing.to_radians();
+                let half = INTENT_HALF_ANGLE.to_radians();
+                let start = middle - half;
+                let sweep = 2.0 * half;
+                let at = |t: f32| {
+                    let angle = start + sweep * t;
+                    [cx + angle.cos() * ring, cy + angle.sin() * ring]
+                };
+                let track: Vec<[f32; 2]> = (0..=INTENT_STEPS)
+                    .map(|step| at(step as f32 / INTENT_STEPS as f32))
+                    .collect();
+                for pair in track.windows(2) {
+                    painter.stroke(
+                        pair[0],
+                        pair[1],
+                        INTENT_WIDTH,
+                        theme::color::ACCENT.alpha(0.13),
+                    );
+                }
+                let lit = (filled * INTENT_STEPS as f32).ceil() as usize;
+                let ink = if requested {
+                    theme::color::ENERGY
+                } else {
+                    theme::color::ACCENT
+                };
+                painter.set_gain(if requested { theme::light::INTENT } else { 1.0 });
+                for pair in track[..=lit.min(INTENT_STEPS)].windows(2) {
+                    if requested {
+                        // Coverage under one on purpose: at full coverage the
+                        // gain clips the arc to white and it stops reading as
+                        // energy at all.
+                        crate::effects::light_stroke(
+                            painter,
+                            pair[0],
+                            pair[1],
+                            INTENT_WIDTH,
+                            ink.alpha(INTENT_LIT_ALPHA),
+                        );
+                    } else {
+                        painter.stroke(pair[0], pair[1], INTENT_WIDTH, ink.alpha(0.34));
+                    }
+                }
+                painter.set_gain(1.0);
+                // The threshold the simulation compares against, marked on the arc
+                // so "lit" is never the only way to read that a request is live.
+                let tick = (sim::config::nn::ACTION_THRESHOLD as f32 + 1.0) * 0.5;
+                let mark = at(tick);
+                let outward = [(mark[0] - cx) / ring, (mark[1] - cy) / ring];
+                painter.stroke(
+                    [
+                        mark[0] - outward[0] * INTENT_WIDTH,
+                        mark[1] - outward[1] * INTENT_WIDTH,
+                    ],
+                    [
+                        mark[0] + outward[0] * INTENT_WIDTH * 1.6,
+                        mark[1] + outward[1] * INTENT_WIDTH * 1.6,
+                    ],
+                    1.0,
+                    theme::color::TEXT_DIM.alpha(0.65),
+                );
+            }
+        },
+    );
+}
+
+/// How far out the velocity chevron sits, in Arena units: clear of the intent
+/// ring, which reaches `INTENT_RADIUS` Ship radii.
+const CHEVRON_REACH: f32 = 62.0;
 
 /// A geometric navigation overlay, independent of the Network's sampled inputs.
 fn draw_tracking(p: &mut Painter, world: &World) {
@@ -987,8 +1096,13 @@ fn draw_tracking(p: &mut Painter, world: &World) {
     if world.agent.alive && speed > 8.0 {
         let direction = [ship.vx as f32 / speed, ship.vy as f32 / speed];
         // This short chevron shows actual velocity, which can differ from heading.
-        seam_copies(p, ship.x, ship.y, 64.0, |p, cx, cy| {
-            let tip = [cx + direction[0] * 48.0, cy + direction[1] * 48.0];
+        // Outside the intent ring, so the two never overlap: the chevron is
+        // where the Ship is going, the ring is what it is asking for.
+        seam_copies(p, ship.x, ship.y, 80.0, |p, cx, cy| {
+            let tip = [
+                cx + direction[0] * CHEVRON_REACH,
+                cy + direction[1] * CHEVRON_REACH,
+            ];
             for sign in [-1.0, 1.0] {
                 p.stroke(
                     tip,
@@ -1127,14 +1241,20 @@ mod tests {
         let small = luma(asteroid_ink(Size::Small, unit(0.6, 0.6)));
         assert!(small > unlit);
 
-        // A facet's interior never falls below the rock's mid-tone, which is
-        // the brightness the flat fill had: the golden frame samples the centre
-        // of an asteroid and expects rock there, not the rock's dark side.
-        let dark_middle = luma(asteroid_facet_ink(Size::Large, unit(0.6, 0.6)));
-        let lit_middle = luma(asteroid_facet_ink(Size::Large, unit(-0.6, -0.6)));
-        assert!((dark_middle - flat).abs() < 0.02);
-        assert!(unlit < dark_middle && dark_middle < lit_middle);
-        assert!(lit_middle > flat);
+        // The rock's middle is one colour, shared by every facet, and it sits
+        // between the two sides: the fan meets there, and a per-facet middle
+        // would turn the centre into a pinwheel of ten hard wedges.
+        let core = luma(asteroid_shaded(Size::Large, ASTEROID_CORE_SHADE));
+        assert!(unlit < core && core < lit);
+        // It is also the colour anything sampling the centre of a rock finds,
+        // so it has to be plainly rock rather than the field behind it.
+        assert!(core > luma(theme::color::ARENA_BG) + 0.15);
+
+        // The terminator is shaped, so the lit half holds its value and the
+        // fall happens over the back: a facing halfway round is nearer the dark
+        // end than a straight ramp would put it.
+        let across_ink = luma(asteroid_ink(Size::Large, unit(0.6, -0.6)));
+        assert!(across_ink < (unlit + lit) * 0.5);
     }
 
     #[test]
@@ -1213,13 +1333,192 @@ mod tests {
         assert!(p.luminous.is_empty());
     }
 
+    /// A World with the Ship at a known place, facing along +x, with a chosen
+    /// Sensorium written into it. Nothing here steps the World.
+    fn posed(x: f64, y: f64, inputs: &[(usize, f64)]) -> World {
+        let mut world = World::new(sim::Rng::from_seed(11), None);
+        world.agent.ship.x = x;
+        world.agent.ship.y = y;
+        world.agent.ship.heading = 0.0;
+        world.time = 1.0;
+        for (index, value) in inputs {
+            world.agent.inputs[*index] = *value;
+        }
+        world
+    }
+
     #[test]
-    fn the_deep_field_leaves_the_empty_floor_to_the_golden_frame() {
-        // The golden frame samples this pixel as empty floor and requires it to
-        // stay within 0.03 of ARENA_BG per channel. Nothing in the deep field
-        // may sit on it, and the wash alone has to stay well inside that.
+    fn the_corona_shows_what_the_sensorium_holds_and_nothing_else() {
+        let view = ArenaView {
+            origin: [0.0, 0.0],
+            scale: 1.0,
+        };
+
+        // Nothing sensed: nine ticks mark the slots, and no wedge claims a
+        // reading that was never taken.
+        let quiet = posed(480.0, 300.0, &[]);
+        let mut p = Painter::new();
+        p.set_transform(view.transform());
+        draw_corona(&mut p, &quiet.agent.ship, &quiet.agent.inputs);
+        assert!(!p.triangles.is_empty(), "the slots are marked");
+        assert!(p.luminous.is_empty(), "an empty Sensorium lit a wedge");
+
+        // One ray closed: exactly one wedge, and it points where that ray does.
+        // Ray 3 is +80 degrees from the heading, which with the Ship facing +x
+        // and screen y running down is below and ahead of it.
+        let sensing = posed(480.0, 300.0, &[(3, 0.9)]);
+        p.clear();
+        p.set_transform(view.transform());
+        draw_corona(&mut p, &sensing.agent.ship, &sensing.agent.inputs);
+        assert!(!p.luminous.is_empty());
+        let bearing = 80.0_f32.to_radians();
+        for vertex in &p.luminous {
+            let angle = (vertex.pos[1] - 300.0).atan2(vertex.pos[0] - 480.0);
+            let off = (angle - bearing).abs();
+            assert!(
+                off <= (CORONA_HALF_ANGLE + 1.0).to_radians(),
+                "a wedge at {angle} is not on the ray at {bearing}"
+            );
+        }
+        // And the ring is dented inward where the reading is: a closing threat
+        // pulls its arc toward the hull, away from the rest radius the eight
+        // quiet slots are still holding.
+        let radius = ship_cfg::RADIUS as f32;
+        let lit_ring = p
+            .luminous
+            .iter()
+            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
+            .fold(f32::MIN, f32::max);
+        let quiet_ring = p
+            .triangles
+            .iter()
+            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
+            .fold(f32::MIN, f32::max);
+        assert!(
+            lit_ring < quiet_ring,
+            "a reading of 0.9 did not dent the ring: {lit_ring} vs {quiet_ring}"
+        );
+        assert!(lit_ring >= (CORONA_NEAR * radius) - CORONA_TICK - 1.0);
+        assert!(quiet_ring <= CORONA_FAR * radius + 1.0);
+
+        // Halfway in is halfway between the two radii, so the ring is a
+        // reading and not merely an alarm.
+        let halfway = posed(480.0, 300.0, &[(3, 0.5)]);
+        p.clear();
+        p.set_transform(view.transform());
+        draw_corona(&mut p, &halfway.agent.ship, &halfway.agent.inputs);
+        let middle = p
+            .luminous
+            .iter()
+            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
+            .fold(f32::MIN, f32::max);
+        let expected = (CORONA_FAR + CORONA_NEAR) * 0.5 * radius;
+        assert!(
+            (middle - expected).abs() < 1.5,
+            "a reading of 0.5 sat at {middle}, not {expected}"
+        );
+    }
+
+    #[test]
+    fn the_corona_crosses_the_seam_with_the_ship() {
+        let view = ArenaView {
+            origin: [0.0, 0.0],
+            scale: 1.0,
+        };
+        // A Ship on the right edge wears its corona on both sides of the seam,
+        // the same way its hull is drawn on both sides.
+        let world = posed(W as f64 - 4.0, 300.0, &[(0, 0.8)]);
+        let mut p = Painter::new();
+        p.set_transform(view.transform());
+        p.set_clip(Some([0.0, 0.0, W, H]));
+        draw_corona(&mut p, &world.agent.ship, &world.agent.inputs);
+        assert!(p.triangles.iter().any(|v| v.pos[0] > W - 10.0));
+        assert!(p.triangles.iter().any(|v| v.pos[0] < 40.0));
+        assert!(p
+            .triangles
+            .iter()
+            .chain(p.luminous.iter())
+            .all(|v| v.pos[0] >= 0.0 && v.pos[0] <= W));
+    }
+
+    #[test]
+    fn the_intent_ring_reads_the_activations_the_network_produced() {
+        let mut rng = sim::Rng::from_seed(7);
+        let genome = sim::Genome::new(&mut rng, &mut sim::InnovationTracker::new());
+        let mut network = sim::Network::from_genome(&genome);
+        let mut inputs = [0.0; sim::config::nn::INPUTS];
+        inputs[sim::config::nn::BIAS_INPUT] = 1.0;
+        let outputs = network.activate(&inputs);
+        let world = posed(480.0, 300.0, &[]);
+
+        let view = ArenaView {
+            origin: [0.0, 0.0],
+            scale: 1.0,
+        };
+        let mut p = Painter::new();
+        p.set_transform(view.transform());
+        draw_intent(&mut p, &world.agent.ship, &network);
+
+        // Every arc is drawn, so a shut request reads as shut rather than as
+        // absent; only the ones over the threshold carry light.
+        assert!(!p.triangles.is_empty());
+        let requested = outputs
+            .iter()
+            .take(4)
+            .filter(|value| **value > sim::config::nn::ACTION_THRESHOLD)
+            .count();
+        assert_eq!(
+            p.luminous.is_empty(),
+            requested == 0,
+            "light and request disagree: {outputs:?}"
+        );
+        // The ring sits off the hull, clear of the corona inside it.
+        let radius = ship_cfg::RADIUS as f32;
+        let nearest = p
+            .triangles
+            .iter()
+            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
+            .fold(f32::MAX, f32::min);
+        assert!(nearest > CORONA_FAR * radius);
+    }
+
+    #[test]
+    fn a_ray_is_drawn_only_where_it_measured_something() {
+        let view = ArenaView {
+            origin: [0.0, 0.0],
+            scale: 1.0,
+        };
+        let quiet = posed(480.0, 300.0, &[]);
+        let mut p = Painter::new();
+        p.set_transform(view.transform());
+        draw_rays(&mut p, &quiet.agent.ship, &quiet.agent.inputs);
+        assert!(p.is_empty(), "nine 'nothing there's were drawn as lines");
+
+        // A reading of 0.5 is half the sensor range away, and the streak ends
+        // there rather than running on to the range limit.
+        let sensing = posed(480.0, 300.0, &[(0, 0.5)]);
+        p.clear();
+        p.set_transform(view.transform());
+        p.set_clip(Some([0.0, 0.0, W, H]));
+        draw_rays(&mut p, &sensing.agent.ship, &sensing.agent.inputs);
+        let reach = p
+            .luminous
+            .iter()
+            .map(|v| v.pos[0] - 480.0)
+            .fold(f32::MIN, f32::max);
+        let expected = 0.5 * sensors::RANGE as f32;
+        assert!(
+            (reach - expected).abs() < RAY_TIP_RADIUS + 1.0,
+            "the ray ended at {reach}, not the {expected} it measured"
+        );
+    }
+
+    #[test]
+    fn the_sky_stays_clear_of_the_frame_the_golden_image_samples() {
+        // The golden frame samples this pixel as empty field. The backdrop
+        // shader owns what is under it now, but nothing drawn here may sit on
+        // it, or the sample stops meaning "empty field".
         const FLOOR: [f32; 2] = [475.0, 20.0];
-        const TOLERANCE: f32 = 0.03;
         for star in SKY.far.iter().chain(SKY.mid.iter()) {
             let covered = FLOOR[0] >= star.x
                 && FLOOR[0] <= star.x + star.size
@@ -1233,24 +1532,6 @@ mod tests {
                 (FLOOR[0] - star.x).abs() > reach || (FLOOR[1] - star.y).abs() > reach,
                 "a sparkle crosses the empty floor at {FLOOR:?}"
             );
-        }
-        for nebula in NEBULAE.iter() {
-            assert!(
-                (NEBULA_MIN_RADIUS..=NEBULA_MIN_RADIUS + NEBULA_RADIUS_RANGE)
-                    .contains(&nebula.radius)
-            );
-            let distance = (FLOOR[0] - nebula.center[0]).hypot(FLOOR[1] - nebula.center[1]);
-            assert!(
-                distance > nebula.radius * 0.5,
-                "a nebula reaches the empty floor at {FLOOR:?}"
-            );
-        }
-        let lifted = wash_ink(WASH_TOP_ALPHA);
-        let base = theme::color::ARENA_BG;
-        // What the wash actually moves a channel by is its own alpha times the
-        // distance it tints toward; that has to stay inside the tolerance.
-        for (tinted, plain) in [(lifted.r, base.r), (lifted.g, base.g), (lifted.b, base.b)] {
-            assert!((tinted - plain).abs() * WASH_TOP_ALPHA < TOLERANCE);
         }
     }
 }

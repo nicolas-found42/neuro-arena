@@ -55,22 +55,47 @@ The Arena keeps its 960×600 logical shape at any window size, so a seed means
 the same thing in a small window and a full-screen one (ADR 0006). Windows can
 be resized freely; the sidebar keeps its size so the numbers stay legible.
 
-The flight observatory shows sampled Sensor Rays in a Ship-relative polar instrument,
-signed threat telemetry, and actual motor requests. The Network highlights its two
-strongest incoming weighted signals per node; solid paths are positive, dashed paths
-negative. These are weighted activations, not confidence or causal explanations.
-A chevron shows actual velocity; the bracket and hull-clearance label identify the
-nearest Asteroid geometrically. Collision echoes are bounded and suppressed above 16×.
-At small window sizes, the Network becomes a named output snapshot.
+## What you are looking at
 
-The Arena itself is a deep field: Asteroids read as key-lit minerals under a
-layered starfield and nebula wash, and the game's events are light — thruster
-plumes, bullet tracers, impact flashes, Wave pulses along the containment seam,
-and the watched Ship's luminous trail. See the
-[deep-field observatory report](docs/research/deep-field-observatory.md) for
-this pass's captures, research chain, and evidence, and the
-[native visual audit](docs/research/native-visual-upgrade.md) for the flight
-observatory beneath it.
+**The Agent wears its mind.** Around the hull sit two rings, both read straight
+out of the World:
+
+- the **Perception Corona** — nine arcs, one per Sensor Ray. Each rests out at
+  3.4 hull radii and is pulled in toward the Ship as that ray's reading closes,
+  so the ring dents inward where the Agent is under pressure, running from cyan
+  to amber as it does;
+- the **Intent Ring** — four gauges outside it, each where its request acts:
+  fire at the nose, thrust at the tail, the turns to port and starboard. The
+  fill is the network's raw output mapped onto the arc and the tick is
+  `ACTION_THRESHOLD`, the value the simulation actually compares against, so a
+  live request reads without relying on it being lit.
+
+Neither is smoothed, extrapolated or invented. An empty corona means the Agent
+sensed nothing.
+
+The strip below the Arena is the bench copy of both, with numbers on it, plus
+signed threat telemetry. The Network panel colours its inputs by role — Sensor
+Rays cyan, threat telemetry amber, the Agent's own channels neutral — and lights
+the two strongest incoming weighted signals per node; solid paths are positive,
+dashed paths negative. These are weighted activations, not confidence or causal
+explanations. A chevron shows actual velocity; the bracket and hull-clearance
+label identify the nearest Asteroid geometrically. Collision echoes are bounded
+and suppressed above 16×. At small window sizes, the Network becomes a named
+output snapshot.
+
+The Arena is a deep field, and the frame it is drawn in holds values past white.
+Asteroids are lit minerals under one key light, standing in front of baked
+nebulae and a three-layer starfield; everything the simulation _does_ is written
+as light and blooms — thruster plumes, bullet tracers, impact flashes, Wave
+pulses along the containment seam, and the watched Ship's luminous trail.
+Nothing the interface prints can bloom, which is what keeps the panels and the
+text sharp without a mask (ADR 0011).
+
+See the [luminous field report](docs/research/luminous-field.md) for this pass's
+captures, research chain, and evidence; the
+[deep-field observatory report](docs/research/deep-field-observatory.md) and the
+[native visual audit](docs/research/native-visual-upgrade.md) record the passes
+beneath it.
 
 ## Seeds and reproducibility
 
@@ -106,8 +131,9 @@ A Cargo workspace with two members:
   separate crate, so it compiles against exactly the API the app uses.
 - **`app`** — the window (`winit`), the renderer (`wgpu`), text (`cosmic-text`)
   and the panels. Lyon tessellates the instrument arcs and signed signal paths.
-  The frame graph, the 2D geometry and the panel layout are
-  written here; there is no UI framework, by decision (ADR 0004).
+  The frame graph — a high-dynamic-range scene, a bloom chain and a composite
+  (ADR 0011) — the 2D geometry and the panel layout are written here; there is
+  no UI framework, by decision (ADR 0004).
 
 The vocabulary is the project's own and lives in [`CONTEXT.md`](CONTEXT.md):
 Arena, World, Ship, Agent, Asteroid, Wave, Episode, Seam Copy, Sensor Ray;

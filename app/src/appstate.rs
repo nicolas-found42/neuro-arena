@@ -31,7 +31,7 @@ use sim::{
 use crate::gpu::Gpu;
 use crate::observatory::{self, Trail};
 use crate::painter::{Painter, Transform};
-use crate::renderer::Renderer;
+use crate::renderer::{Frame, Renderer};
 use crate::scene;
 use crate::{panels, theme, ui};
 
@@ -604,8 +604,9 @@ impl App {
 
     // ---- drawing ---------------------------------------------------------
 
-    /// Fill the Painter for this frame and return the physical extent.
-    fn build_frame(&mut self) -> [f32; 2] {
+    /// Fill the Painter for this frame and return the geometry the renderer
+    /// needs: the window's physical extent and where the Arena sits in it.
+    fn build_frame(&mut self) -> Frame {
         let dpr = self.dpr();
         let (physical, logical): ([f32; 2], [f32; 2]) = match self.config.as_ref() {
             Some(config) => (
@@ -619,12 +620,14 @@ impl App {
         let painter = &mut self.painter;
         painter.clear();
         painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
-        painter.rect(0.0, 0.0, logical[0], logical[1], theme::color::APP_BG);
+        // The window's ground is painted by the backdrop pass, which knows
+        // where the Arena is and lays the deep field inside it.
 
         // The Arena keeps its 960×600 shape and scales into whatever space the
         // sidebar leaves; the panels stay at 1:1 and stay legible (ADR 0006).
+        let arena_view = observatory::arena_view(layout.arena, dpr);
         if let Some(world) = self.watched.as_ref() {
-            let view = observatory::arena_view(layout.arena, dpr);
+            let view = arena_view;
             self.trail.observe(
                 (self.run.generation(), self.watched_member),
                 world,
@@ -711,19 +714,23 @@ impl App {
                 &[(text.clone(), theme::color::TEXT.alpha(alpha))],
             );
         }
-        physical
+        let (x, y, width, height) = arena_view.rect();
+        Frame {
+            viewport: physical,
+            arena: [x, y, width, height],
+        }
     }
 
     fn draw(&mut self) {
         if !self.ready {
             return;
         }
-        let physical = self.build_frame();
+        let frame = self.build_frame();
 
         let (Some(gpu), Some(renderer)) = (self.gpu.as_ref(), self.renderer.as_mut()) else {
             return;
         };
-        renderer.set_viewport(gpu, physical[0], physical[1]);
+        renderer.set_frame(gpu, frame);
         let Some(surface) = self.surface.as_ref() else {
             return;
         };
@@ -761,18 +768,7 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let background = theme::color::APP_BG;
-        renderer.render(
-            gpu,
-            &view,
-            &self.painter,
-            wgpu::Color {
-                r: f64::from(background.r),
-                g: f64::from(background.g),
-                b: f64::from(background.b),
-                a: 1.0,
-            },
-        );
+        renderer.render(gpu, &view, &self.painter);
         // A frame that is dropped instead of presented leaves a blank window.
         gpu.queue.present(frame);
     }

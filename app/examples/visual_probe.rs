@@ -6,7 +6,7 @@ use neuroarena_app::{
     painter::{Painter, Transform},
     panels,
     renderer::Renderer,
-    scene, theme, ui,
+    scene, ui,
 };
 use sim::{Competence, Run, RunOptions};
 use std::time::Instant;
@@ -70,17 +70,17 @@ fn main() {
     .unwrap();
     let target = Offscreen::new(&gpu, width, height, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut renderer = Renderer::new(&gpu, target.format);
-    renderer.set_viewport(&gpu, width as f32, height as f32);
     let layout = ui::Layout::new(width as f32 / dpr, height as f32 / dpr);
+    let arena = observatory::arena_view(layout.arena, dpr).rect();
+    renderer.set_frame(
+        &gpu,
+        neuroarena_app::renderer::Frame {
+            viewport: [width as f32, height as f32],
+            arena: [arena.0, arena.1, arena.2, arena.3],
+        },
+    );
     let mut painter = Painter::new();
     painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
-    painter.rect(
-        0.0,
-        0.0,
-        width as f32 / dpr,
-        height as f32 / dpr,
-        theme::color::APP_BG,
-    );
     scene::draw_arena(
         &mut painter,
         &world,
@@ -147,7 +147,7 @@ fn main() {
     let mut times = Vec::new();
     for i in 0..130 {
         let start = Instant::now();
-        renderer.render(&gpu, target.view(), &painter, wgpu::Color::BLACK);
+        renderer.render(&gpu, target.view(), &painter);
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
