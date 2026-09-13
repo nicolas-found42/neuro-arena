@@ -12,7 +12,7 @@
 //!
 //! And one that is not light: an Impact also jolts the whole field. The Arena
 //! carries a bounded trauma that decays on the simulation clock, squared into a
-//! displacement no larger than [`SHAKE_AMPLITUDE`], which the app reads from
+//! displacement no larger than `SHAKE_AMPLITUDE`, which the app reads from
 //! [`Effects::shake`] and carries on the Arena's transform.
 //! The chrome is outside that transform, so the instruments never move.
 //!
@@ -30,13 +30,13 @@
 //! The old `speed <= 16` gate avoided that by observing nothing at speed, which
 //! made the language invisible on a default run.
 //!
-//! Instead each frame keeps only its own final [`OBSERVE_WINDOW`] seconds.
+//! Instead each frame keeps only its own final `OBSERVE_WINDOW` seconds.
 //! Every step is observed, but into a staging ring keyed by simulation time
 //! that drops whatever has fallen a window behind the clock; what survives the
 //! frame's last step is exactly the window that ends at the frame's end, and
 //! [`Effects::settle`] commits it to the record the frame draws. At ×1 a frame
 //! is a single step, entirely inside the window, so the record there is
-//! unchanged: an Impact still lives its full [`LIFETIME`] across frames. At
+//! unchanged: an Impact still lives its full `LIFETIME` across frames. At
 //! speed the window is the difference between the field's most recent moment
 //! and a palimpsest.
 
@@ -203,7 +203,7 @@ impl Effects {
     }
 
     /// How hard the field has been hit: raised by the window's impacts and
-    /// deaths, falling by [`TRAUMA_DECAY`] a second of simulation time,
+    /// deaths, falling by `TRAUMA_DECAY` a second of simulation time,
     /// bounded at one.
     pub fn trauma(&self) -> f32 {
         self.trauma

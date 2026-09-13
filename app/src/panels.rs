@@ -499,8 +499,8 @@ pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
 /// round value.
 ///
 /// The panel gives way from the top down. The cloud is the register that needs a
-/// plane, so it is the first thing given up: below [`GHOST_MIN_H`] of cloud it
-/// loses the previous Generation, below [`CLOUD_MIN_H`] it is dropped whole
+/// plane, so it is the first thing given up: below `GHOST_MIN_H` of cloud it
+/// loses the previous Generation, below `CLOUD_MIN_H` it is dropped whole
 /// rather than squeezed — half a plane is not a reading — and the rows it was
 /// using go to the run. The run's curve is never the one named away: the panel's
 /// floor is where its axis still reads. Nothing the panel prints is ever
@@ -1103,7 +1103,7 @@ fn watched_mark(painter: &mut Painter, at: [f32; 2]) {
 /// into the node that sums it. That is all they are — no confidence, no
 /// attribution, no causal claim, and not the post-`tanh` activation the output
 /// bar beside them shows. The legend prints the same sentence the drawing
-/// obeys, and [`signal_legend`] is written from the counts the drawing loop
+/// obeys, and `signal_legend` is written from the counts the drawing loop
 /// used, so the panel cannot claim a "strongest" it did not draw.
 ///
 /// The instrument is drawn at the height its three columns want and centred in

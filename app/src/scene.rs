@@ -78,7 +78,7 @@ impl ArenaView {
     /// hull, the shots, the trail, the light over them and the field's own
     /// measure take the shake together, and nothing outside it does. The sky
     /// deliberately does not: it is a volume with depth, so each of its layers
-    /// takes its own share of the jolt instead ([`sky_transform`]). It is
+    /// takes its own share of the jolt instead (`sky_transform`). It is
     /// scaled like the rest of the Arena, so a jolt is the same fraction of
     /// the field at every window size.
     pub fn transform(&self) -> Transform {
