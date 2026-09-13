@@ -134,7 +134,10 @@ fn render(world: &World, show_rays: bool) -> Frame {
         .expect("rendering a frame needs a GPU adapter; this test cannot run without one");
     let target = Offscreen::new(&gpu, WIDTH, HEIGHT, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut renderer = Renderer::new(&gpu, target.format);
-    renderer.set_viewport(&gpu, WIDTH as f32, HEIGHT as f32);
+    renderer.set_frame(
+        &gpu,
+        neuroarena_app::renderer::Frame::full(WIDTH as f32, HEIGHT as f32),
+    );
 
     let mut painter = Painter::new();
     scene::draw_arena(
@@ -143,21 +146,12 @@ fn render(world: &World, show_rays: bool) -> Frame {
         ArenaView {
             origin: [0.0, 0.0],
             scale: 1.0,
+            tremor: [0.0, 0.0],
         },
         show_rays,
         show_rays,
     );
-    renderer.render(
-        &gpu,
-        target.view(),
-        &painter,
-        wgpu::Color {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 1.0,
-        },
-    );
+    renderer.render(&gpu, target.view(), &painter);
     Frame {
         pixels: target.read_rgba(&gpu),
     }
@@ -264,8 +258,9 @@ fn the_ship_asteroids_and_bullets_land_where_the_simulation_puts_them() {
     assert!(ship_pixels > 20, "the Ship is drawn: {ship_pixels} pixels");
 
     // An Asteroid: the Large asteroid at (700, 160) is drawn in the asteroid grey, which
-    // is brighter than the empty floor everywhere around it.
-    let floor = frame.pixel(475, 20);
+    // is brighter than the empty floor everywhere around it. The floor sample sits at
+    // y = 40: below the top-edge rulers, whose 9.5 px floor keeps their glyphs off it.
+    let floor = frame.pixel(475, 40);
     let asteroid = frame.pixel(700, 160);
     assert!(
         asteroid[0] > floor[0] + 20 && asteroid[1] > floor[1] + 20,
@@ -279,16 +274,28 @@ fn the_ship_asteroids_and_bullets_land_where_the_simulation_puts_them() {
         "the bullet is drawn: {bullet:?}"
     );
 
-    // The floor is the Arena background, at the far corner away from any entity.
+    // The floor is the deep field the backdrop shader paints, not an entity:
+    // cool, dark, and at least as deep as the Arena's own ground, which the
+    // wash and the nebulae are laid over rather than replacing.
     let background = theme::color::ARENA_BG;
-    let expected = [
-        (f32::from(floor[0]) / 255.0 - background.r).abs(),
-        (f32::from(floor[1]) / 255.0 - background.g).abs(),
-        (f32::from(floor[2]) / 255.0 - background.b).abs(),
-    ];
+    let ground = background.to_array().map(|channel| (channel * 255.0) as u8);
     assert!(
-        expected.iter().all(|delta| *delta < 0.03),
-        "the floor is the Arena background: {floor:?} vs {background:?}"
+        floor[2] >= floor[1] && floor[1] >= floor[0],
+        "the field runs cool: {floor:?}"
+    );
+    assert!(
+        floor.iter().take(3).all(|channel| *channel < 90),
+        "the field stays a dark ground: {floor:?}"
+    );
+    assert!(
+        floor[2] >= ground[2],
+        "the field is never deeper than the Arena's own ground: {floor:?} vs {ground:?}"
+    );
+    // And it is nowhere near the value of rock, which is what the Asteroid
+    // check above leans on.
+    assert!(
+        i32::from(asteroid[0]) > i32::from(floor[0]) + 20,
+        "rock and field are not told apart: {asteroid:?} vs {floor:?}"
     );
 }
 

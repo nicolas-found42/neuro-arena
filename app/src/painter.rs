@@ -154,7 +154,6 @@ pub struct TextItem {
 }
 
 /// The frame, as data.
-#[derive(Default)]
 pub struct Painter {
     pub triangles: Vec<TriangleVertex>,
     /// Light, not matter: blended additively over the frame's matter after
@@ -163,7 +162,25 @@ pub struct Painter {
     pub text: Vec<TextItem>,
     transform: Transform,
     clip: Option<[f32; 4]>,
+    /// How far past white the light emitted next is written. The frame is high
+    /// dynamic range and the bloom threshold sits at white, so this is the one
+    /// number that decides whether an emitter glows (see `theme::light`).
+    gain: f32,
     paths: crate::vector::Paths,
+}
+
+impl Default for Painter {
+    fn default() -> Self {
+        Self {
+            triangles: Vec::new(),
+            luminous: Vec::new(),
+            text: Vec::new(),
+            transform: Transform::IDENTITY,
+            clip: None,
+            gain: 1.0,
+            paths: crate::vector::Paths::default(),
+        }
+    }
 }
 
 impl Painter {
@@ -178,6 +195,7 @@ impl Painter {
         self.text.clear();
         self.transform = Transform::IDENTITY;
         self.clip = None;
+        self.gain = 1.0;
     }
 
     pub fn set_transform(&mut self, transform: Transform) {
@@ -186,6 +204,28 @@ impl Painter {
 
     pub fn transform(&self) -> Transform {
         self.transform
+    }
+
+    /// Write the light that follows at `gain` times the brightest value the
+    /// interface can print. Restore the previous gain when the emitter is done:
+    /// it is frame state, like the transform and the clip, and [`Painter::clear`]
+    /// returns it to 1.0 at the top of every frame.
+    pub fn set_gain(&mut self, gain: f32) {
+        self.gain = gain.max(0.0);
+    }
+
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
+    /// A light's colour in the linear values the frame accumulates: the authored
+    /// colour, lifted by the current gain. Alpha is coverage and is left alone.
+    fn light(&self, color: Rgba) -> [f32; 4] {
+        let mut linear = color.to_linear();
+        linear[0] *= self.gain;
+        linear[1] *= self.gain;
+        linear[2] *= self.gain;
+        linear
     }
 
     pub fn is_empty(&self) -> bool {
@@ -205,7 +245,8 @@ impl Painter {
     /// The same triangle, blended additively: light laid over the matter.
     pub fn luminous_triangle(&mut self, a: [f32; 2], b: [f32; 2], c: [f32; 2], color: Rgba) {
         let points = [self.point(a), self.point(b), self.point(c)];
-        emit_triangle(&mut self.luminous, points, color.to_linear(), self.clip);
+        let color = self.light(color);
+        emit_triangle(&mut self.luminous, points, color, self.clip);
     }
 
     /// Clip subsequent geometry to a rectangle in the current logical space.
@@ -215,6 +256,29 @@ impl Painter {
             let b = self.point([r[2], r[3]]);
             [a[0], a[1], b[0], b[1]]
         });
+    }
+
+    /// Draw in a given space and leave the Painter as it was found.
+    ///
+    /// This is the Arena's own space — a transform from logical Arena units
+    /// into the window, and the logical bounds of the field as a clip — and the
+    /// point of it is that entering is one call and leaving is the same call:
+    /// the transform and the clip are put back whatever the body does, so a
+    /// caller cannot walk away with the Painter still wearing the Arena's
+    /// geometry. The gain is not part of the scope: emitters are expected to
+    /// restore it themselves, as they always have.
+    pub fn arena_scope(
+        &mut self,
+        transform: Transform,
+        clip: [f32; 4],
+        draw: impl FnOnce(&mut Painter),
+    ) {
+        let (transform_before, clip_before) = (self.transform, self.clip);
+        self.set_transform(transform);
+        self.set_clip(Some(clip));
+        draw(self);
+        self.transform = transform_before;
+        self.clip = clip_before;
     }
 
     /// A convex quad, as two triangles.
@@ -244,6 +308,27 @@ impl Painter {
         }
         for index in 1..points.len() - 1 {
             self.gradient_triangle([
+                (points[0], colors[0]),
+                (points[index], colors[index]),
+                (points[index + 1], colors[index + 1]),
+            ]);
+        }
+    }
+
+    /// The same polygon as light: additive, with each vertex carrying its own
+    /// colour, written past white by the Painter's gain.
+    ///
+    /// This is the primitive that lets a *gradient* be light. Before it, light
+    /// with a falloff had to be banded into flat steps — the Wave pulse is four
+    /// strips for exactly this reason — or approximated by stacked rings. A
+    /// shock front, a ribbon and a plume all want one additive ramp, and this
+    /// is it.
+    pub fn luminous_gradient_polygon(&mut self, points: &[[f32; 2]], colors: &[Rgba]) {
+        if points.len() < 3 || colors.len() != points.len() {
+            return;
+        }
+        for index in 1..points.len() - 1 {
+            self.luminous_gradient_triangle([
                 (points[0], colors[0]),
                 (points[index], colors[index]),
                 (points[index + 1], colors[index + 1]),
@@ -348,10 +433,10 @@ impl Painter {
     }
 
     /// A gradient triangle blended additively, for light with soft falloff.
-    fn luminous_gradient_triangle(&mut self, points: [([f32; 2], Rgba); 3]) {
+    pub fn luminous_gradient_triangle(&mut self, points: [([f32; 2], Rgba); 3]) {
         let vertices = points.map(|(point, color)| TriangleVertex {
             pos: self.point(point),
-            color: color.to_linear(),
+            color: self.light(color),
         });
         emit_gradient(&mut self.luminous, vertices, self.clip);
     }
@@ -403,17 +488,31 @@ impl Painter {
 
     /// A filled circle, `segments` around the rim.
     pub fn circle(&mut self, center: [f32; 2], radius: f32, color: Rgba, segments: usize) {
+        self.fan(center, radius, color, segments, false);
+    }
+
+    /// The same disc in the additive buffer: a small light, not a painted dot.
+    pub fn luminous_circle(&mut self, center: [f32; 2], radius: f32, color: Rgba, segments: usize) {
+        self.fan(center, radius, color, segments, true);
+    }
+
+    fn fan(&mut self, center: [f32; 2], radius: f32, color: Rgba, segments: usize, light: bool) {
         let segments = segments.max(3);
         let step = std::f32::consts::TAU / segments as f32;
         for index in 0..segments {
             let a = step * index as f32;
             let b = step * (index + 1) as f32;
-            self.triangle(
-                center,
-                [center[0] + a.cos() * radius, center[1] + a.sin() * radius],
-                [center[0] + b.cos() * radius, center[1] + b.sin() * radius],
-                color,
-            );
+            let rim = |angle: f32| {
+                [
+                    center[0] + angle.cos() * radius,
+                    center[1] + angle.sin() * radius,
+                ]
+            };
+            if light {
+                self.luminous_triangle(center, rim(a), rim(b), color);
+            } else {
+                self.triangle(center, rim(a), rim(b), color);
+            }
         }
     }
 
@@ -583,6 +682,43 @@ fn clip_polygon(points: &[[f32; 2]], rect: [f32; 4]) -> Vec<[f32; 2]> {
 }
 
 #[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn an_arena_scope_puts_the_painter_back_as_it_found_it() {
+        let mut p = Painter::new();
+        let outer = Transform::new(2.0, [31.0, 9.0]);
+        p.set_transform(outer);
+        p.set_clip(Some([10.0, 20.0, 30.0, 40.0]));
+        let outer_clip = p.clip;
+
+        let arena = Transform::new(1.5, [4.0, 6.0]);
+        p.arena_scope(arena, [0.0, 0.0, 960.0, 600.0], |p| {
+            // Inside, the Painter wears the Arena's geometry...
+            assert_eq!(p.transform(), arena);
+            assert_eq!(
+                p.clip,
+                Some([4.0, 6.0, 4.0 + 960.0 * 1.5, 6.0 + 600.0 * 1.5])
+            );
+            p.rect(0.0, 0.0, 960.0, 600.0, Rgba::rgb(1.0, 1.0, 1.0));
+        });
+
+        // ...and afterwards the caller's, whatever the body did with it.
+        assert_eq!(p.transform(), outer);
+        assert_eq!(p.clip, outer_clip);
+        assert!(!p.triangles.is_empty(), "the body drew nothing");
+        // The geometry the body submitted was clipped to the Arena the scope
+        // installed, not to the outer clip it was drawn under.
+        assert!(p
+            .triangles
+            .iter()
+            .all(|v| (4.0..=4.0 + 960.0 * 1.5).contains(&v.pos[0])
+                && (6.0..=6.0 + 600.0 * 1.5).contains(&v.pos[1])));
+    }
+}
+
+#[cfg(test)]
 mod clipping_tests {
     use super::*;
     #[test]
@@ -653,6 +789,35 @@ mod luminous_tests {
         assert!(p.luminous.iter().all(|v| v.color[0] > v.color[1]));
         p.clear();
         assert!(p.triangles.is_empty() && p.luminous.is_empty());
+    }
+
+    #[test]
+    fn a_gain_lifts_light_past_white_and_leaves_matter_alone() {
+        let mut p = Painter::new();
+        assert_eq!(p.gain(), 1.0);
+        p.set_gain(4.0);
+        // Matter is printed at the value it was authored at, whatever the gain.
+        p.triangle([0.0, 0.0], [1.0, 0.0], [0.0, 1.0], Rgba::rgb(1.0, 1.0, 1.0));
+        assert!(p.triangles.iter().all(|v| v.color[0] == 1.0));
+        // Light is written past white, which is the only thing the bloom
+        // threshold looks at. Coverage is untouched: alpha is not intensity.
+        p.luminous_triangle(
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            Rgba::rgb(1.0, 1.0, 1.0).alpha(0.5),
+        );
+        assert!(p
+            .luminous
+            .iter()
+            .all(|v| v.color[0] == 4.0 && v.color[3] == 0.5));
+        // A negative gain is not a thing light can have.
+        p.set_gain(-3.0);
+        assert_eq!(p.gain(), 0.0);
+        // And the gain is frame state, like the transform and the clip.
+        p.set_gain(9.0);
+        p.clear();
+        assert_eq!(p.gain(), 1.0);
     }
 
     #[test]

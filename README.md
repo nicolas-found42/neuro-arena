@@ -42,7 +42,7 @@ For formatting, linting, tests, coverage, dependency checks, and Git hooks, see
 | ------------------------ | --------------------------------------------------------------------------------------------- |
 | Pause / Resume (`space`) | freeze the run and study what the current Ship is doing                                       |
 | Speed slider             | 1× real time up to ∞ "as fast as the machine allows"; the achieved rate is measured and shown |
-| Motion (`m`)             | toggle trails and collision echoes; reduced motion preserves all telemetry                    |
+| Motion (`m`)             | reduced motion: no trail, no collision echoes, no field tremor; every reading stays           |
 | Rays (`r`)               | overlay the Ship's 9 Sensor Rays                                                              |
 | Restart                  | replay the pinned seed from Generation 1, or the watched Genome                               |
 | New seed                 | roll a fresh seed and start a new lineage                                                     |
@@ -55,22 +55,78 @@ The Arena keeps its 960×600 logical shape at any window size, so a seed means
 the same thing in a small window and a full-screen one (ADR 0006). Windows can
 be resized freely; the sidebar keeps its size so the numbers stay legible.
 
-The flight observatory shows sampled Sensor Rays in a Ship-relative polar instrument,
-signed threat telemetry, and actual motor requests. The Network highlights its two
-strongest incoming weighted signals per node; solid paths are positive, dashed paths
-negative. These are weighted activations, not confidence or causal explanations.
-A chevron shows actual velocity; the bracket and hull-clearance label identify the
-nearest Asteroid geometrically. Collision echoes are bounded and suppressed above 16×.
-At small window sizes, the Network becomes a named output snapshot.
+## What you are looking at
 
-The Arena itself is a deep field: Asteroids read as key-lit minerals under a
-layered starfield and nebula wash, and the game's events are light — thruster
-plumes, bullet tracers, impact flashes, Wave pulses along the containment seam,
-and the watched Ship's luminous trail. See the
-[deep-field observatory report](docs/research/deep-field-observatory.md) for
-this pass's captures, research chain, and evidence, and the
-[native visual audit](docs/research/native-visual-upgrade.md) for the flight
-observatory beneath it.
+**The Agent wears its mind.** Around the hull sit two rings, both read straight
+out of the World:
+
+- the **Perception Corona** — nine arcs, one per Sensor Ray. Each rests out at
+  3.4 hull radii and is pulled in toward the Ship as that ray's reading closes,
+  so the ring dents inward where the Agent is under pressure, running from cyan
+  to amber as it does;
+- the **Intent Ring** — four gauges outside it, each where its request acts:
+  fire at the nose, thrust at the tail, the turns to port and starboard. The
+  fill is the network's raw output mapped onto the arc and the tick is
+  `ACTION_THRESHOLD`, the value the simulation actually compares against, so a
+  live request reads without relying on it being lit.
+
+Neither is smoothed, extrapolated or invented. An empty corona means the Agent
+sensed nothing.
+
+Where the corona answers "how close is it on bearing k", the **Near Boundary**
+answers "where is the wall": a broken line joining the bearings that actually
+found something, at the range each one measured, with a dot on every sample.
+It is drawn as open chains and never closed into a loop, because the Sensorium
+samples nine bearings 40° apart rather than sweeping — a chord across a bearing
+that read nothing would be an edge the simulation never measured. With nothing
+found on any bearing it draws nothing at all.
+
+The strip below the Arena is the bench copy of both, with numbers on it, plus
+signed threat telemetry. The Network panel colours its inputs by role — Sensor
+Rays cyan, threat telemetry amber, the Agent's own channels neutral — and draws
+the two largest pre-activation terms `Σ w·a` per node as bands whose **opacity**
+carries the magnitude, cyan for a positive term and amber for a negative. That
+ranking is one hop into the sum the network evaluates, not confidence and not
+attribution, and the panel says so. A chevron shows actual velocity; the bracket
+and hull-clearance label identify the nearest Asteroid geometrically. When the
+topology outgrows the box the panel says how many terms it left out rather than
+dropping them quietly. At small window sizes, the Network becomes a named output
+snapshot.
+
+**The Record** reads the run at two scales. The lower register is the shaped
+Fitness the run actually optimises — best and mean, labelled as the breeding
+score rather than as skill (ADR 0003) — with the share of the Population that
+cleared the first Wave beside it. The upper register is the Generation itself:
+one point per member in (coverage, alive time), tinted by that member's own
+novelty, filling in as Episodes land, with the previous Generation kept behind
+it as a ghost and the watched member ringed. Mean Waves is not drawn: at shipped
+tuning a Generation holds one to three distinct Wave values, so the honest curve
+is the score that moves.
+
+The Arena is a deep field with depth: four sky layers — far dust, the mid field,
+near stars and the motes closest to the hull — displaced against the watched
+Ship's own velocity, so the field reads as a volume the Ship moves through
+rather than wallpaper behind it. The same depth decides how much of the field's
+tremor each layer takes. The frame holds values past white, so everything the
+simulation _does_ is written as light and blooms: thruster plumes, a bullet's
+tracer, a muzzle flash, a shock front opened at the Impact's own recorded radius
+with its spill on the rock, Wave pulses along the containment seam, and the
+watched Ship's tapered ribbon of a trail, stored unwrapped so a wrap leaves one
+edge and arrives at the other. The event language runs at every speed — the
+cosmetic layer is handed the last quarter-second of simulation before each
+frame rather than being switched off above ×16 — so a default run at ×100 shows
+it. Nothing the interface prints can bloom, which is what keeps the panels and
+the text sharp without a mask (ADR 0011).
+
+See [The field and the record](docs/research/field-and-record.md) for this pass's
+captures, sources and measurements, the
+[luminous field report](docs/research/luminous-field.md) for the HDR pass, and the
+[observatory, legible report](docs/research/observatory-next.md) for the pass that gave
+the bench its minimum-window legs, the frame its idle light and the routing that put
+the Ship's instruments on the Ship; the
+[deep-field observatory report](docs/research/deep-field-observatory.md) and
+the [native visual audit](docs/research/native-visual-upgrade.md) record the passes
+beneath it.
 
 ## Seeds and reproducibility
 
@@ -106,13 +162,14 @@ A Cargo workspace with two members:
   separate crate, so it compiles against exactly the API the app uses.
 - **`app`** — the window (`winit`), the renderer (`wgpu`), text (`cosmic-text`)
   and the panels. Lyon tessellates the instrument arcs and signed signal paths.
-  The frame graph, the 2D geometry and the panel layout are
-  written here; there is no UI framework, by decision (ADR 0004).
+  The frame graph — a high-dynamic-range scene, a bloom chain and a composite
+  (ADR 0011) — the 2D geometry and the panel layout are written here; there is
+  no UI framework, by decision (ADR 0004).
 
 The vocabulary is the project's own and lives in [`CONTEXT.md`](CONTEXT.md):
 Arena, World, Ship, Agent, Asteroid, Wave, Episode, Seam Copy, Sensor Ray;
 Genome, Network, Population, Generation, Species, Fitness, Competence Gate,
-Innovation Tracker; HUD, Chart. Decisions are recorded in
+Innovation Tracker; HUD, Record, Cohort, Near Boundary. Decisions are recorded in
 [`docs/adr/`](docs/adr).
 
 ## Tuning

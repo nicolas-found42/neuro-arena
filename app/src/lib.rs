@@ -7,6 +7,8 @@
 
 pub mod appstate;
 pub mod atlas;
+pub mod cohort;
+pub mod deepfield;
 pub mod effects;
 pub mod gpu;
 pub mod instruments;
