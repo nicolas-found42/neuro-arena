@@ -14,6 +14,21 @@
 //! is only what the simulation put in it: the starfield laid over the field,
 //! the measuring grid, the containment seam, and the entities.
 //!
+//! The sky is a volume the Ship moves through, not wallpaper behind it. Its
+//! four layers — far dust, the mid field, the near stars that sparkle, and the
+//! motes of dust closest to the hull — are laid out once from fixed seeds and
+//! then displaced against the Ship's own velocity in proportion to their depth,
+//! each one wrapped about the torus so the field never runs out of sky. The same
+//! depth decides how much of the Arena's tremor a layer takes: the near ones
+//! take nearly all of it and the far one nearly none, because a jolt that moves
+//! a nebula as much as a rock three metres away is a camera trick, not depth.
+//! The subject plane — rocks, hull, shots and the light over them — always takes
+//! the whole jolt: it is the thing the shake is about.
+//!
+//! The backdrop the shader paints is deliberately still on both counts. A
+//! nebula is at infinity, so no parallax and no tremor reaches it, and a still
+//! backdrop under a shaken subject plane is exactly what parallax means.
+//!
 //! Asteroids and the Ship's hull are materials, lit by one key light from the
 //! upper left. Everything that emits — the thrust plume, bullet tracers, the
 //! seam hairline, the perception corona — goes into the Painter's additive
@@ -59,11 +74,13 @@ impl ArenaView {
     ///
     /// The view's `tremor` is folded in here — an offset of a few Arena units,
     /// published by the effects pass when the field is hit — because this is
-    /// the one place the Arena's transform is built: every layer that lives in
-    /// Arena space, the field's own geometry, the trail and the light over it,
-    /// takes the shake together, and nothing outside it does. It is scaled
-    /// like the rest of the Arena, so a jolt is the same fraction of the field
-    /// at every window size.
+    /// the one place the *subject plane's* transform is built: the rocks, the
+    /// hull, the shots, the trail, the light over them and the field's own
+    /// measure take the shake together, and nothing outside it does. The sky
+    /// deliberately does not: it is a volume with depth, so each of its layers
+    /// takes its own share of the jolt instead ([`sky_transform`]). It is
+    /// scaled like the rest of the Arena, so a jolt is the same fraction of
+    /// the field at every window size.
     pub fn transform(&self) -> Transform {
         Transform::new(
             self.scale,
@@ -107,16 +124,34 @@ struct Sparkle {
     color: Rgba,
 }
 
-/// The sky is three depth layers: far dust, a mid field, and a handful of near
-/// stars that sparkle. Counts are fixed, not density-scaled: the field is part
-/// of the golden frame and must not depend on anything but these constants.
+/// A mote of near dust: the layer closest to the Ship, and the smallest thing
+/// in the field. It is drawn as light rather than as matter, because a mote has
+/// no shape of its own — what is visible is the key light it catches, and only
+/// where the field behind it is dark.
+#[derive(Clone, Copy, Debug)]
+struct Mote {
+    x: f32,
+    y: f32,
+    size: f32,
+    ink: Rgba,
+}
+
+/// The sky is four depth layers: far dust, a mid field, a handful of near stars
+/// that sparkle, and the motes closest to the hull. Counts are fixed, not
+/// density-scaled: the field is part of the golden frame and must not depend on
+/// anything but these constants.
 const STAR_FAR_COUNT: usize = 110;
 const STAR_MID_COUNT: usize = 36;
 const STAR_NEAR_COUNT: usize = 10;
+/// Enough motes that the nearest layer reads as a volume, few enough that it
+/// stays dust: at any moment only a handful sit where the field is dark enough
+/// to show them.
+const MOTE_COUNT: usize = 32;
 /// One seed per layer, so re-laying one layer leaves the others where they are.
 const STAR_FAR_SEED: u32 = 0x5EED_2024;
 const STAR_MID_SEED: u32 = 0x5EED_5A17;
 const STAR_NEAR_SEED: u32 = 0x5EED_9E37;
+const MOTE_SEED: u32 = 0x5EED_D057;
 /// Dim end of each layer's brightness spread; the bright end is this plus that
 /// layer's range. The nearer the layer, the brighter it runs.
 const STAR_FAR_MIN_ALPHA: f32 = 0.12;
@@ -126,6 +161,102 @@ const STAR_MID_ALPHA_RANGE: f32 = 0.20;
 /// Half the arm span of a near star's sparkle, in logical units.
 const SPARKLE_MIN_ARM: f32 = 2.0;
 const SPARKLE_ARM_RANGE: f32 = 1.0;
+/// A mote is 0.6–1.2 Arena units across: a speck of dust, not snow. Anything
+/// larger stops reading as a thing the Ship passes and starts reading as a
+/// second starfield in front of the first.
+const MOTE_MIN_SIZE: f32 = 0.6;
+const MOTE_SIZE_RANGE: f32 = 0.6;
+/// How much of the key light a mote catches, at [`theme::light::DUST`]'s gain
+/// over it. The brightest mote is still dimmer than the dimmest star behind it
+/// (a far field star starts at [`STAR_FAR_MIN_ALPHA`]), which is the whole
+/// point: dust registers as a speck over empty field and disappears over
+/// anything bright, so it can say "there is air here" without becoming
+/// confetti.
+const MOTE_MIN_COVERAGE: f32 = 0.05;
+const MOTE_COVERAGE_RANGE: f32 = 0.06;
+
+// ------------------------------------------------------------ the depth
+
+/// How much of its own motion the Ship's field lags by, in seconds: the sky is
+/// displaced by the distance the Ship would cover in this time, at the 320
+/// Arena units per second it is capped to (`ship::MAX_SPEED`). At full tilt the
+/// nearest layer leans 41 units — about four per cent of the field — and a slow
+/// drift leans a couple. That is the size at which the layers separate without
+/// the field sliding out from under the rocks; a larger number turns a chase
+/// into a starfield on rails.
+const TRAIL_SECONDS: f32 = 0.15;
+
+/// One depth per layer: the fraction of the Ship's own displacement it takes,
+/// and at the same time the fraction of the Arena's tremor it takes. The two
+/// are the same fact — how close the layer is — so they are one number, and the
+/// gaps between them are wide enough that the four layers separate at a glance.
+/// The subject plane is not in this table: it takes the whole of both.
+const PARALLAX_FAR_DEPTH: f32 = 0.10;
+const PARALLAX_MID_DEPTH: f32 = 0.25;
+const PARALLAX_NEAR_DEPTH: f32 = 0.52;
+const PARALLAX_DUST_DEPTH: f32 = 0.85;
+
+/// The displacement one sky layer takes from the Ship's own motion, in Arena
+/// units: the negative of the Ship's velocity over [`TRAIL_SECONDS`], scaled by
+/// the layer's depth. The field gives way as the Ship moves through it, and it
+/// answers the velocity itself — nothing is integrated and no history is kept,
+/// so a Ship that stops puts the sky back exactly where it was, and a paused
+/// frame is the frame before it. Reduced motion is a still field: the
+/// displacement is exactly zero, which is what lets a golden frame be a pure
+/// function of the World.
+fn parallax(ship: &Ship, depth: f32, motion: bool) -> [f32; 2] {
+    if !motion {
+        return [0.0, 0.0];
+    }
+    [
+        -(ship.vx as f32) * TRAIL_SECONDS * depth,
+        -(ship.vy as f32) * TRAIL_SECONDS * depth,
+    ]
+}
+
+/// Where one sky element lands once its layer has been displaced: its laid
+/// position plus the layer's offset, brought back into the field.
+///
+/// The sky is laid over the torus, so an element pushed past an edge is already
+/// arriving at the other one — at any displacement the field is as full as it
+/// was laid, with no empty band where the sky slid out from under its own clip.
+#[inline]
+fn sky_point(x: f32, y: f32, offset: [f32; 2]) -> [f32; 2] {
+    [(x + offset[0]).rem_euclid(W), (y + offset[1]).rem_euclid(H)]
+}
+
+/// The transform for one sky layer: the Arena's own placement, carrying the
+/// layer's depth-weighted share of the tremor instead of the whole jolt.
+///
+/// Built from the view's public fields rather than by changing
+/// [`ArenaView::transform`], which is the subject plane's and stays that. The
+/// same `depth` that decides a layer's parallax decides its shake, because both
+/// are the same question — how far away the layer is — and a nebula that shook
+/// like a rock would flatten the field this pass exists to deepen.
+fn sky_transform(view: &ArenaView, depth: f32) -> Transform {
+    Transform::new(
+        view.scale,
+        [
+            view.origin[0] + view.tremor[0] * depth * view.scale,
+            view.origin[1] + view.tremor[1] * depth * view.scale,
+        ],
+    )
+}
+
+/// The field's rect in a sky layer's own space.
+///
+/// The Painter resolves a clip through whatever transform is current, and a
+/// layer's transform carries less of the tremor than the subject plane's does.
+/// Handing the field's rect over untranslated would therefore clip each layer
+/// to its own, less-shaken copy of the field and let the sky hang a few units
+/// outside the Arena the rocks are in. So the share the layer did *not* take is
+/// added back here, and every layer — and the subject plane — is clipped to
+/// exactly one rect: the field's.
+fn sky_clip(view: &ArenaView, depth: f32) -> [f32; 4] {
+    let x = view.tremor[0] * (1.0 - depth);
+    let y = view.tremor[1] * (1.0 - depth);
+    [x, y, W + x, H + y]
+}
 
 /// The whole sky, laid out once per process and shared by every frame.
 #[derive(Debug)]
@@ -133,11 +264,12 @@ struct Sky {
     far: Vec<Star>,
     mid: Vec<Star>,
     near: Vec<Sparkle>,
+    motes: Vec<Mote>,
 }
 
 static SKY: LazyLock<Sky> = LazyLock::new(build_sky);
 
-/// Lay out the sky from the three layer seeds.
+/// Lay out the sky from the four layer seeds.
 ///
 /// The generator is written out here on purpose. `sim`'s `Rng` belongs to the
 /// simulation stream — taking one number from it would move the Episode — and a
@@ -159,6 +291,7 @@ fn build_sky() -> Sky {
             STAR_MID_ALPHA_RANGE,
         ),
         near: build_sparkles(),
+        motes: build_motes(),
     }
 }
 
@@ -200,6 +333,24 @@ fn build_sparkles() -> Vec<Sparkle> {
             y: lcg_unit(&mut seed) * H,
             arm: SPARKLE_MIN_ARM + lcg_unit(&mut seed) * SPARKLE_ARM_RANGE,
             color: theme::color::STAR_BRIGHT,
+        });
+    }
+    layer
+}
+
+/// The nearest layer: motes of dust, each with its own size and its own share
+/// of the key light. The ink is resolved here rather than per frame because a
+/// mote's colour is a constant of the layout, like a star's.
+fn build_motes() -> Vec<Mote> {
+    let mut seed = MOTE_SEED;
+    let mut layer = Vec::with_capacity(MOTE_COUNT);
+    for _ in 0..MOTE_COUNT {
+        let coverage = MOTE_MIN_COVERAGE + lcg_unit(&mut seed) * MOTE_COVERAGE_RANGE;
+        layer.push(Mote {
+            x: lcg_unit(&mut seed) * W,
+            y: lcg_unit(&mut seed) * H,
+            size: MOTE_MIN_SIZE + lcg_unit(&mut seed) * MOTE_SIZE_RANGE,
+            ink: theme::color::KEY.alpha(coverage),
         });
     }
     layer
@@ -280,13 +431,21 @@ pub fn draw_arena(
         // The wash, the nebulae and the frame's falloff are already on the target:
         // the backdrop shader painted them before any of this was submitted. What
         // is left is what sits *in* the field — its sky, its measure, its edge.
-        draw_stars(painter);
+        // The sky is the one thing here that is not at the subject plane's
+        // distance, so it takes the view and the Ship's own motion: its layers
+        // displace and shake by their depth.
+        draw_stars(painter, &view, &world.agent.ship, motion);
         draw_grid(painter);
         draw_field_edge(painter);
 
         let agent = &world.agent;
-        // The rays go down first: they are translucent, and reading them through
-        // the asteroids is the point of the overlay.
+        // The near boundary goes down before the rays and under everything
+        // solid, so the rocks it is measured against are drawn over it.
+        if agent.alive && world.time > 0.0 {
+            draw_envelope(painter, &agent.ship, &agent.inputs, fit);
+        }
+        // The rays follow: they are translucent, and reading them through the
+        // asteroids is the point of the overlay.
         if show_rays && world.time > 0.0 {
             draw_rays(painter, &agent.ship, &agent.inputs);
         }
@@ -348,26 +507,281 @@ fn draw_grid(painter: &mut Painter) {
     }
 }
 
-fn draw_stars(painter: &mut Painter) {
-    for star in SKY.far.iter().chain(SKY.mid.iter()) {
-        painter.rect(star.x, star.y, star.size, star.size, star.color);
-    }
+/// Draw the sky, one layer at a time, each displaced by its own depth.
+///
+/// Each layer gets its own scope because each carries its own share of the
+/// tremor, and its own offset because each leans a different amount against the
+/// Ship's motion. The far layer is drawn first and the dust last, so the nearer
+/// a layer is, the later it lands: the sparkle crosses the star behind it, and
+/// the motes — light, so they composite over every material anyway — are the
+/// closest thing to the hull.
+fn draw_stars(painter: &mut Painter, view: &ArenaView, ship: &Ship, motion: bool) {
+    let far = parallax(ship, PARALLAX_FAR_DEPTH, motion);
+    painter.arena_scope(
+        sky_transform(view, PARALLAX_FAR_DEPTH),
+        sky_clip(view, PARALLAX_FAR_DEPTH),
+        |painter| {
+            for star in &SKY.far {
+                let [x, y] = sky_point(star.x, star.y, far);
+                painter.rect(x, y, star.size, star.size, star.color);
+            }
+        },
+    );
+
+    let mid = parallax(ship, PARALLAX_MID_DEPTH, motion);
+    painter.arena_scope(
+        sky_transform(view, PARALLAX_MID_DEPTH),
+        sky_clip(view, PARALLAX_MID_DEPTH),
+        |painter| {
+            for star in &SKY.mid {
+                let [x, y] = sky_point(star.x, star.y, mid);
+                painter.rect(x, y, star.size, star.size, star.color);
+            }
+        },
+    );
+
     // The near layer crosses its own dot, which is what makes it a sparkle.
-    for star in &SKY.near {
-        let ink = star.color.alpha(0.45);
-        painter.stroke(
-            [star.x - star.arm, star.y],
-            [star.x + star.arm, star.y],
-            0.7,
-            ink,
+    let near = parallax(ship, PARALLAX_NEAR_DEPTH, motion);
+    painter.arena_scope(
+        sky_transform(view, PARALLAX_NEAR_DEPTH),
+        sky_clip(view, PARALLAX_NEAR_DEPTH),
+        |painter| {
+            for star in &SKY.near {
+                let [x, y] = sky_point(star.x, star.y, near);
+                let ink = star.color.alpha(0.45);
+                painter.stroke([x - star.arm, y], [x + star.arm, y], 0.7, ink);
+                painter.stroke([x, y - star.arm], [x, y + star.arm], 0.7, ink);
+                painter.rect(x - 1.0, y - 1.0, 2.0, 2.0, star.color);
+            }
+        },
+    );
+
+    // The dust, and the only layer drawn as light: a mote has no shape of its
+    // own, and what is visible is the key light it catches. The gain is lifted
+    // for it and put back as it was found — the Painter outlives this call.
+    let dust = parallax(ship, PARALLAX_DUST_DEPTH, motion);
+    painter.arena_scope(
+        sky_transform(view, PARALLAX_DUST_DEPTH),
+        sky_clip(view, PARALLAX_DUST_DEPTH),
+        |painter| {
+            let gain = painter.gain();
+            painter.set_gain(theme::light::DUST);
+            for mote in &SKY.motes {
+                let [x, y] = sky_point(mote.x, mote.y, dust);
+                luminous_rect(
+                    painter,
+                    x - mote.size * 0.5,
+                    y - mote.size * 0.5,
+                    mote.size,
+                    mote.size,
+                    mote.ink,
+                );
+            }
+            painter.set_gain(gain);
+        },
+    );
+}
+
+#[cfg(test)]
+mod parallax_tests {
+    use super::*;
+
+    /// A Ship moving at a given velocity, in Arena units per second.
+    fn moving(vx: f64, vy: f64) -> Ship {
+        let mut world = World::new(sim::Rng::from_seed(3), None);
+        world.agent.ship.vx = vx;
+        world.agent.ship.vy = vy;
+        world.agent.ship
+    }
+
+    fn reach(offset: [f32; 2]) -> f32 {
+        offset[0].hypot(offset[1])
+    }
+
+    /// Whether two points are the same place. Adding a whole Arena to a
+    /// coordinate and taking it back is not exact arithmetic in f32, but it is
+    /// exact geometry — a hundredth of an Arena unit is a hundredth of a pixel
+    /// at 1×, which is nowhere.
+    fn same(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-2 && (a[1] - b[1]).abs() < 1e-2
+    }
+
+    #[test]
+    fn a_still_frame_leaves_the_sky_where_it_was_laid() {
+        // Reduced motion, and a Ship that has not moved: every layer sits at
+        // exactly zero, so the sky a golden frame draws is the layout and
+        // nothing else.
+        let still = moving(0.0, 0.0);
+        let flying = moving(180.0, -240.0);
+        for depth in [
+            PARALLAX_FAR_DEPTH,
+            PARALLAX_MID_DEPTH,
+            PARALLAX_NEAR_DEPTH,
+            PARALLAX_DUST_DEPTH,
+        ] {
+            assert_eq!(parallax(&still, depth, true), [0.0, 0.0]);
+            assert_eq!(parallax(&flying, depth, false), [0.0, 0.0]);
+            // And the layer the backdrop lives on — no depth — never moves at
+            // all, moving Ship or not.
+            assert_eq!(parallax(&flying, 0.0, true), [0.0, 0.0]);
+        }
+        // A zero offset is the layout: every element lands where it was laid.
+        assert_eq!(sky_point(12.5, 40.25, [0.0, 0.0]), [12.5, 40.25]);
+    }
+
+    #[test]
+    fn the_layers_lean_against_the_ships_own_motion_by_depth() {
+        let ship = moving(200.0, -100.0);
+        let dust = parallax(&ship, PARALLAX_DUST_DEPTH, true);
+        let near = parallax(&ship, PARALLAX_NEAR_DEPTH, true);
+        let mid = parallax(&ship, PARALLAX_MID_DEPTH, true);
+        let far = parallax(&ship, PARALLAX_FAR_DEPTH, true);
+
+        // The field gives way backwards: a Ship moving +x and -y sees the sky
+        // come toward it on x and fall behind on y.
+        assert!(dust[0] < 0.0 && dust[1] > 0.0);
+        // The whole effect is this ordering, and it is strict: closer layers
+        // move more, and the farthest still moves.
+        assert!(reach(dust) > reach(near));
+        assert!(reach(near) > reach(mid));
+        assert!(reach(mid) > reach(far));
+        assert!(reach(far) > 0.0);
+        // Half the speed, half the lean: the displacement is a function of the
+        // velocity, not an accumulation of it.
+        let slow = parallax(&moving(100.0, -50.0), PARALLAX_DUST_DEPTH, true);
+        assert!((slow[0] - dust[0] * 0.5).abs() < 1e-4);
+        assert!((slow[1] - dust[1] * 0.5).abs() < 1e-4);
+        // At the Ship's own cap the nearest layer trails a few per cent of the
+        // field: a volume, not a starfield on rails.
+        let capped = parallax(&moving(ship_cfg::MAX_SPEED, 0.0), PARALLAX_DUST_DEPTH, true);
+        assert!(reach(capped) < W * 0.05);
+        assert!(reach(capped) > W * 0.02);
+
+        // The same depth decides how much of the tremor a layer takes: the
+        // nebula is nearly still under a jolt that moves the subject plane
+        // whole, and nothing but the subject plane takes all of it.
+        let view = ArenaView {
+            origin: [40.0, 60.0],
+            scale: 1.5,
+            tremor: [4.0, -2.0],
+        };
+        let shift = |depth: f32| sky_transform(&view, depth).offset;
+        assert_eq!(sky_transform(&view, PARALLAX_FAR_DEPTH).scale, view.scale);
+        assert_eq!(shift(0.0), view.origin);
+        let subject = view.transform().offset;
+        let weights = [
+            PARALLAX_FAR_DEPTH,
+            PARALLAX_MID_DEPTH,
+            PARALLAX_NEAR_DEPTH,
+            PARALLAX_DUST_DEPTH,
+        ];
+        for pair in weights.windows(2) {
+            assert!(shift(pair[0])[0] < shift(pair[1])[0]);
+            assert!(shift(pair[0])[1] > shift(pair[1])[1]);
+        }
+        assert!(shift(PARALLAX_DUST_DEPTH)[0] < subject[0]);
+
+        // The layers take different shares of the jolt but share one clip: a
+        // layer's rect in its own space lands on exactly the field's rect in
+        // the window, so the sky is clipped to the field and not to its own,
+        // differently-shaken copy of it.
+        let projected = |transform: Transform, rect: [f32; 4]| {
+            let near = transform.apply([rect[0], rect[1]]);
+            let far = transform.apply([rect[2], rect[3]]);
+            [near[0], near[1], far[0], far[1]]
+        };
+        let field = projected(view.transform(), [0.0, 0.0, W, H]);
+        for depth in weights {
+            let layer = projected(sky_transform(&view, depth), sky_clip(&view, depth));
+            for (side, corner) in layer.iter().zip(field.iter()) {
+                assert!((side - corner).abs() < 1e-3, "{layer:?} is not {field:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_displaced_layer_wraps_about_the_torus() {
+        // Moving the layer by a whole Arena is moving it not at all: this is
+        // what makes a displacement of any size a shift on the torus rather
+        // than a slide out of the frame.
+        for (x, y) in [(0.0, 0.0), (W - 0.25, 12.0), (480.0, H - 0.25)] {
+            assert!(same(sky_point(x, y, [W, H]), sky_point(x, y, [0.0, 0.0])));
+            assert!(same(sky_point(x, y, [-W, -H]), sky_point(x, y, [0.0, 0.0])));
+            // Which is the same statement as: an element pushed past an edge is
+            // the element on the other side of the seam.
+            assert!(same(
+                sky_point(x - W, y, [0.0, 0.0]),
+                sky_point(x, y, [0.0, 0.0])
+            ));
+        }
+
+        // However hard the field is displaced, every element of every layer
+        // lands inside the field: the displacement is a translation of the
+        // torus, so a neighbour stays a neighbour and nothing is ever dropped.
+        let ship = moving(ship_cfg::MAX_SPEED, -ship_cfg::MAX_SPEED);
+        let sealed = |x: f32, y: f32, offset: [f32; 2]| {
+            let point = sky_point(x, y, offset);
+            assert!((0.0..W).contains(&point[0]) && (0.0..H).contains(&point[1]));
+            // The element on the other side of the seam is the same element.
+            assert!(same(sky_point(x + W, y + H, offset), point));
+        };
+        for star in SKY.far.iter().chain(SKY.mid.iter()) {
+            sealed(star.x, star.y, parallax(&ship, PARALLAX_FAR_DEPTH, true));
+        }
+        for star in &SKY.near {
+            sealed(star.x, star.y, parallax(&ship, PARALLAX_NEAR_DEPTH, true));
+        }
+        for mote in &SKY.motes {
+            sealed(mote.x, mote.y, parallax(&ship, PARALLAX_DUST_DEPTH, true));
+        }
+    }
+
+    #[test]
+    fn the_newest_layer_is_the_nearest_and_the_ground_is_clear_of_it() {
+        // The four layers are laid out in depth order and the motes come last:
+        // they are the layer the Ship flies through.
+        assert_eq!(SKY.motes.len(), MOTE_COUNT);
+        let again = build_sky();
+        assert_eq!(
+            SKY.motes
+                .iter()
+                .map(|m| (m.x, m.y, m.size, m.ink.a))
+                .collect::<Vec<_>>(),
+            again
+                .motes
+                .iter()
+                .map(|m| (m.x, m.y, m.size, m.ink.a))
+                .collect::<Vec<_>>()
         );
-        painter.stroke(
-            [star.x, star.y - star.arm],
-            [star.x, star.y + star.arm],
-            0.7,
-            ink,
-        );
-        painter.rect(star.x - 1.0, star.y - 1.0, 2.0, 2.0, star.color);
+        for mote in &SKY.motes {
+            assert!((0.0..W).contains(&mote.x) && (0.0..H).contains(&mote.y));
+            assert!((MOTE_MIN_SIZE..=MOTE_MIN_SIZE + MOTE_SIZE_RANGE).contains(&mote.size));
+            assert!(
+                (MOTE_MIN_COVERAGE..=MOTE_MIN_COVERAGE + MOTE_COVERAGE_RANGE).contains(&mote.ink.a)
+            );
+            // Dimmer than the dimmest star behind it, and nowhere near the
+            // bloom threshold: dust is not a light source, it is a thing the
+            // light falls on.
+            assert!(mote.ink.a < STAR_FAR_MIN_ALPHA);
+        }
+        // The newest layer is also the nearest: it displaces past every star
+        // layer, at any velocity.
+        let ship = moving(300.0, 300.0);
+        let dust = reach(parallax(&ship, PARALLAX_DUST_DEPTH, true));
+        for star in [PARALLAX_FAR_DEPTH, PARALLAX_MID_DEPTH, PARALLAX_NEAR_DEPTH] {
+            assert!(dust > reach(parallax(&ship, star, true)));
+        }
+
+        // The empty floor the golden image samples stays empty: the dust is the
+        // one layer laid after that test was written, so it is checked here.
+        const FLOOR: [f32; 2] = [475.0, 20.0];
+        for mote in &SKY.motes {
+            let half = mote.size * 0.5;
+            assert!(
+                (FLOOR[0] - mote.x).abs() > half || (FLOOR[1] - mote.y).abs() > half,
+                "a mote sits on the empty floor at {FLOOR:?}"
+            );
+        }
     }
 }
 
@@ -932,6 +1346,169 @@ fn draw_rays(painter: &mut Painter, ship: &Ship, inputs: &[f64]) {
     }
 }
 
+// --------------------------------------------------------------- free space
+
+/// The nine ray indices in bearing order. The Sensorium hands its readings over
+/// in the order 0°, +40°, −40°, +80°, −80°, +120°, −120°, +160°, −160°, so
+/// walking them in index order would visit the bearings out of order and cross
+/// the boundary over itself. Walking them from −160° round to +160° is the order
+/// the boundary actually has: one entry per ray, and the table is the whole of
+/// the count.
+///
+/// Written out rather than sorted at run time, because `RAY_OFFSETS_DEG` is the
+/// simulation's table and this is only its sort.
+const ENVELOPE_ORDER: [usize; 9] = [8, 6, 4, 2, 0, 1, 3, 5, 7];
+
+/// The chords between neighbouring samples, as the drawing's one luminous
+/// accent: where the field is dark, the boundary of the near space is lit. The
+/// gain is `theme::light::ENVELOPE`, below the Ray overlay's on purpose — this
+/// is the shape *under* the readings, not another reading.
+///
+/// The width and the dots are sized to carry the instrument on their own. These
+/// were first set for a closed polygon that had a fill doing most of the work;
+/// when the fill went — the fill was asserting walls across bearings that had
+/// found nothing — the line and the dots became the whole drawing and were left
+/// too quiet to see. Measured on the rendered frame against the Ray overlay
+/// beside it: at these numbers the boundary reads as its own instrument, and
+/// below roughly two-thirds of them it reads as nothing at all.
+const ENVELOPE_EDGE_WIDTH: f32 = 2.0;
+const ENVELOPE_EDGE_ALPHA: f32 = 0.85;
+/// A dot on every sample, in the reading's own ink. The bearings are nine
+/// discrete measurements, and the dot is what says where the measurement is and
+/// that the line beside it is the instrument's own join.
+const ENVELOPE_VERTEX_RADIUS: f32 = 3.0;
+const ENVELOPE_VERTEX_ALPHA: f32 = 0.95;
+/// The caption, and the other half of the same truth: the boundary is drawn
+/// from bearings that found something, and the dots are those bearings. It is
+/// the field's reading size like the tracking overlay's, run through
+/// [`arena_text`] so it holds its window size at any scale.
+const ENVELOPE_CAPTION: &str = "NEAR BOUNDARY · SAMPLED BEARINGS";
+/// How far below the hull the caption sits, in Arena units: clear of the intent
+/// ring, which reaches 4.6 Ship radii, and of the velocity chevron at 62.
+const ENVELOPE_CAPTION_DROP: f32 = 96.0;
+/// How far in from the field's edge the caption is kept. It is centred on the
+/// hull, and a hull at a seam would take half of it off the field — half a
+/// caption is not a reading.
+const ENVELOPE_CAPTION_MARGIN: f32 = 150.0;
+
+/// What each of the nine bearings found, in bearing order: the point on that
+/// bearing's measured edge, relative to the hull, or `None` when the bearing
+/// found nothing inside the range.
+///
+/// `inputs[k]` is the proximity reading on ray `k`: 1.0 is a hit at zero
+/// distance and 0.0 is nothing inside `sensors::RANGE`, so the distance is its
+/// complement. A bearing that found nothing has no distance to report — all it
+/// says is "not inside five hundred units" — and the honest drawing of that is
+/// nothing at all. This is the whole difference between this instrument and a
+/// sweep: nine bearings either found an edge or they did not, and a boundary
+/// that is not there is not drawn.
+///
+/// It is the same reading, on the same bearings, from the same point on the
+/// hull that the Ray overlay draws.
+fn envelope_samples(ship: &Ship, inputs: &[f64]) -> [Option<[f32; 2]>; ENVELOPE_ORDER.len()] {
+    let mut samples = [None; ENVELOPE_ORDER.len()];
+    for (slot, index) in ENVELOPE_ORDER.iter().enumerate() {
+        let value = inputs.get(*index).copied().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+        if value <= 0.0 {
+            continue;
+        }
+        let distance = (1.0 - value) * sensors::RANGE as f32;
+        let angle = ship.heading + sensors::RAY_OFFSETS_DEG[*index].to_radians();
+        let angle = angle as f32;
+        samples[slot] = Some([angle.cos() * distance, angle.sin() * distance]);
+    }
+    samples
+}
+
+/// Whether the boundary joins the sample at `slot` to the one beside it.
+///
+/// Only neighbours, and only when both found something. A chord drawn across a
+/// bearing that read nothing would run through space the Sensorium never
+/// sampled, and the nine bearings are discrete measurements — the one thing
+/// this drawing must not do is invent an edge between two of them.
+fn boundary_joins(samples: &[Option<[f32; 2]>], slot: usize) -> bool {
+    matches!(
+        (samples.get(slot), samples.get(slot + 1)),
+        (Some(Some(_)), Some(Some(_)))
+    )
+}
+
+/// The near boundary: where each bearing that found something met it, and the
+/// joins between neighbouring ones.
+///
+/// This is the shape a viewer wants and the corona cannot give — the corona
+/// answers "how close is it on bearing k" one arc at a time, and the boundary
+/// answers "where is the wall". It is drawn as open chains rather than a closed
+/// loop on purpose: the bearings are samples, not a sweep, so a chord across
+/// one that found nothing would be an edge that does not exist. What is left is
+/// only ever a measured point, or a join between two measured neighbours.
+///
+/// A reading and not an event: `motion` does not touch it, and a paused frame
+/// draws exactly the frame before it. It sits under the rocks and under the
+/// hull, and its one lit line runs under the corona's arcs. With nothing found
+/// on any bearing it draws nothing at all — not even the caption, because there
+/// is no instrument to name.
+fn draw_envelope(painter: &mut Painter, ship: &Ship, inputs: &[f64], fit: f32) {
+    use crate::painter::Align;
+
+    let samples = envelope_samples(ship, inputs);
+    if samples.iter().all(Option::is_none) {
+        return;
+    }
+
+    let edge = theme::color::ACCENT.alpha(ENVELOPE_EDGE_ALPHA);
+    let mark = theme::color::ACCENT.alpha(ENVELOPE_VERTEX_ALPHA);
+
+    // One gain for the whole drawing, put back as it was found: the gain is
+    // frame state, and the Painter outlives this call.
+    let gain = painter.gain();
+    painter.set_gain(theme::light::ENVELOPE);
+    seam_copies(
+        painter,
+        ship.x,
+        ship.y,
+        // The copy set comes from the range limit and not from the readings, so
+        // a bearing closing never changes how many copies are drawn. Points off
+        // the field are the clip's business, not this loop's.
+        sensors::RANGE + 4.0,
+        |painter, cx, cy| {
+            let placed = |point: [f32; 2]| [point[0] + cx, point[1] + cy];
+            for slot in 0..samples.len() {
+                if boundary_joins(&samples, slot) {
+                    crate::effects::light_stroke(
+                        painter,
+                        placed(samples[slot].unwrap()),
+                        placed(samples[slot + 1].unwrap()),
+                        ENVELOPE_EDGE_WIDTH,
+                        edge,
+                    );
+                }
+            }
+            for point in samples.iter().flatten() {
+                painter.circle(placed(*point), ENVELOPE_VERTEX_RADIUS, mark, 6);
+            }
+        },
+    );
+    painter.set_gain(gain);
+
+    // The caption, under the hull — over it when the hull is near the floor,
+    // because a caption off the field is not a caption.
+    let x = (ship.x as f32).clamp(ENVELOPE_CAPTION_MARGIN, W - ENVELOPE_CAPTION_MARGIN);
+    let y = ship.y as f32;
+    let y = if y > H - ENVELOPE_CAPTION_DROP - 24.0 {
+        y - ENVELOPE_CAPTION_DROP
+    } else {
+        y + ENVELOPE_CAPTION_DROP
+    };
+    painter.text_aligned(
+        [x, y],
+        arena_text(fit, READOUT_SIZE),
+        theme::color::ACCENT.alpha(0.7),
+        Align::Center,
+        ENVELOPE_CAPTION,
+    );
+}
+
 // ------------------------------------------------------------------- mind
 //
 // The signature instrument: the Agent wears what it senses and what it asks
@@ -1255,7 +1832,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sky_is_laid_out_once_in_three_reproducible_layers() {
+    fn the_sky_is_laid_out_once_in_reproducible_layers() {
         let sky = &*SKY;
         assert_eq!(sky.far.len(), STAR_FAR_COUNT);
         assert_eq!(sky.mid.len(), STAR_MID_COUNT);
@@ -1419,232 +1996,154 @@ mod tests {
     }
 
     #[test]
-    fn the_corona_shows_what_the_sensorium_holds_and_nothing_else() {
-        let view = ArenaView {
-            origin: [0.0, 0.0],
-            scale: 1.0,
-            tremor: [0.0, 0.0],
-        };
-
-        // Nothing sensed: nine ticks mark the slots, and no wedge claims a
-        // reading that was never taken.
-        let quiet = posed(480.0, 300.0, &[]);
-        let mut p = Painter::new();
-        p.set_transform(view.transform());
-        draw_corona(&mut p, &quiet.agent.ship, &quiet.agent.inputs);
-        assert!(!p.triangles.is_empty(), "the slots are marked");
-        assert!(p.luminous.is_empty(), "an empty Sensorium lit a wedge");
-
-        // One ray closed: exactly one wedge, and it points where that ray does.
-        // Ray 3 is +80 degrees from the heading, which with the Ship facing +x
-        // and screen y running down is below and ahead of it.
-        let sensing = posed(480.0, 300.0, &[(3, 0.9)]);
-        p.clear();
-        p.set_transform(view.transform());
-        draw_corona(&mut p, &sensing.agent.ship, &sensing.agent.inputs);
-        assert!(!p.luminous.is_empty());
-        let bearing = 80.0_f32.to_radians();
-        for vertex in &p.luminous {
-            let angle = (vertex.pos[1] - 300.0).atan2(vertex.pos[0] - 480.0);
-            let off = (angle - bearing).abs();
-            assert!(
-                off <= (CORONA_HALF_ANGLE + 1.0).to_radians(),
-                "a wedge at {angle} is not on the ray at {bearing}"
-            );
-        }
-        // And the ring is dented inward where the reading is: a closing threat
-        // pulls its arc toward the hull, away from the rest radius the eight
-        // quiet slots are still holding.
-        let radius = ship_cfg::RADIUS as f32;
-        let lit_ring = p
-            .luminous
-            .iter()
-            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
-            .fold(f32::MIN, f32::max);
-        let quiet_ring = p
-            .triangles
-            .iter()
-            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
-            .fold(f32::MIN, f32::max);
-        assert!(
-            lit_ring < quiet_ring,
-            "a reading of 0.9 did not dent the ring: {lit_ring} vs {quiet_ring}"
-        );
-        assert!(lit_ring >= (CORONA_NEAR * radius) - CORONA_TICK - 1.0);
-        assert!(quiet_ring <= CORONA_FAR * radius + 1.0);
-
-        // Halfway in is halfway between the two radii, so the ring is a
-        // reading and not merely an alarm.
-        let halfway = posed(480.0, 300.0, &[(3, 0.5)]);
-        p.clear();
-        p.set_transform(view.transform());
-        draw_corona(&mut p, &halfway.agent.ship, &halfway.agent.inputs);
-        let middle = p
-            .luminous
-            .iter()
-            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
-            .fold(f32::MIN, f32::max);
-        let expected = (CORONA_FAR + CORONA_NEAR) * 0.5 * radius;
-        assert!(
-            (middle - expected).abs() < 1.5,
-            "a reading of 0.5 sat at {middle}, not {expected}"
-        );
-    }
-
-    #[test]
-    fn the_corona_crosses_the_seam_with_the_ship() {
-        let view = ArenaView {
-            origin: [0.0, 0.0],
-            scale: 1.0,
-            tremor: [0.0, 0.0],
-        };
-        // A Ship on the right edge wears its corona on both sides of the seam,
-        // the same way its hull is drawn on both sides.
-        let world = posed(W as f64 - 4.0, 300.0, &[(0, 0.8)]);
-        let mut p = Painter::new();
-        p.set_transform(view.transform());
-        p.set_clip(Some([0.0, 0.0, W, H]));
-        draw_corona(&mut p, &world.agent.ship, &world.agent.inputs);
-        assert!(p.triangles.iter().any(|v| v.pos[0] > W - 10.0));
-        assert!(p.triangles.iter().any(|v| v.pos[0] < 40.0));
-        assert!(p
-            .triangles
-            .iter()
-            .chain(p.luminous.iter())
-            .all(|v| v.pos[0] >= 0.0 && v.pos[0] <= W));
-    }
-
-    #[test]
-    fn the_intent_ring_reads_the_activations_the_network_produced() {
-        let mut rng = sim::Rng::from_seed(7);
-        let genome = sim::Genome::new(&mut rng, &mut sim::InnovationTracker::new());
-        let mut network = sim::Network::from_genome(&genome);
-        let mut inputs = [0.0; sim::config::nn::INPUTS];
-        inputs[sim::config::nn::BIAS_INPUT] = 1.0;
-        let outputs = network.activate(&inputs);
-        let world = posed(480.0, 300.0, &[]);
-
-        let view = ArenaView {
-            origin: [0.0, 0.0],
-            scale: 1.0,
-            tremor: [0.0, 0.0],
-        };
-        let mut p = Painter::new();
-        p.set_transform(view.transform());
-        draw_intent(&mut p, &world.agent.ship, &network);
-
-        // Every arc is drawn, so a shut request reads as shut rather than as
-        // absent; only the ones over the threshold carry light.
-        assert!(!p.triangles.is_empty());
-        let requested = outputs
-            .iter()
-            .take(4)
-            .filter(|value| **value > sim::config::nn::ACTION_THRESHOLD)
-            .count();
-        assert_eq!(
-            p.luminous.is_empty(),
-            requested == 0,
-            "light and request disagree: {outputs:?}"
-        );
-        // The ring sits off the hull, clear of the corona inside it.
-        let radius = ship_cfg::RADIUS as f32;
-        let nearest = p
-            .triangles
-            .iter()
-            .map(|v| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0))
-            .fold(f32::MAX, f32::min);
-        assert!(nearest > CORONA_FAR * radius);
-    }
-
-    #[test]
-    fn a_ray_is_drawn_only_where_it_measured_something() {
-        let view = ArenaView {
-            origin: [0.0, 0.0],
-            scale: 1.0,
-            tremor: [0.0, 0.0],
-        };
-        let quiet = posed(480.0, 300.0, &[]);
-        let mut p = Painter::new();
-        p.set_transform(view.transform());
-        draw_rays(&mut p, &quiet.agent.ship, &quiet.agent.inputs);
-        assert!(p.is_empty(), "nine 'nothing there's were drawn as lines");
-
-        // A reading of 0.5 is half the sensor range away, and the streak ends
-        // there rather than running on to the range limit.
-        let sensing = posed(480.0, 300.0, &[(0, 0.5)]);
-        p.clear();
-        p.set_transform(view.transform());
-        p.set_clip(Some([0.0, 0.0, W, H]));
-        draw_rays(&mut p, &sensing.agent.ship, &sensing.agent.inputs);
-        let reach = p
-            .luminous
-            .iter()
-            .map(|v| v.pos[0] - 480.0)
-            .fold(f32::MIN, f32::max);
-        let expected = 0.5 * sensors::RANGE as f32;
-        assert!(
-            (reach - expected).abs() < RAY_TIP_RADIUS + 1.0,
-            "the ray ended at {reach}, not the {expected} it measured"
-        );
-    }
-
-    #[test]
-    fn the_sky_stays_clear_of_the_frame_the_golden_image_samples() {
-        // The golden frame samples this pixel as empty field. The backdrop
-        // shader owns what is under it now, but nothing drawn here may sit on
-        // it, or the sample stops meaning "empty field".
-        const FLOOR: [f32; 2] = [475.0, 20.0];
-        for star in SKY.far.iter().chain(SKY.mid.iter()) {
-            let covered = FLOOR[0] >= star.x
-                && FLOOR[0] <= star.x + star.size
-                && FLOOR[1] >= star.y
-                && FLOOR[1] <= star.y + star.size;
-            assert!(!covered, "a star sits on the empty floor at {FLOOR:?}");
-        }
-        for star in &SKY.near {
-            let reach = star.arm + 1.0;
-            assert!(
-                (FLOOR[0] - star.x).abs() > reach || (FLOOR[1] - star.y).abs() > reach,
-                "a sparkle crosses the empty floor at {FLOOR:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn arena_space_readings_hold_their_window_size_at_any_scale() {
-        // The Painter scales a text size by the transform, so what it is handed
-        // is not what the window shows. These are the two sizes the tracking
-        // overlay sets, read at a half-size field, its own size, a doubled one,
-        // and at a half-size field on a retina display — where the window is
-        // drawn at twice the device scale and the reading has to hold the size
-        // a reader sees, not the one the backbuffer holds.
-        for base in [RULER_SIZE, READOUT_SIZE] {
-            for (fit, device) in [(0.5, 1.0), (1.0, 1.0), (2.0, 1.0), (0.507, 2.0)] {
-                let mut p = Painter::new();
-                p.set_transform(Transform::new(fit * device, [10.0, 20.0]));
-                p.text(
-                    [0.0, 0.0],
-                    arena_text(fit, base),
-                    Rgba::rgb(1.0, 1.0, 1.0),
-                    "120",
-                );
-                let shown = p.text[0].size / device;
-                assert!(
-                    shown >= READOUT_MIN - 1e-4,
-                    "with a fit of {fit} at {device}× a reading is {shown}, which is not legible"
-                );
-                assert!(
-                    shown <= base * READOUT_HEADROOM + 1e-4,
-                    "with a fit of {fit} a reading is {shown}, past twice the {base} it was set at"
-                );
-                if fit <= 1.0 {
+    fn a_bearing_that_found_something_is_drawn_at_its_own_measured_range() {
+        // A Sensorium with two hits and seven nothings, posed so the bearings
+        // are the Ship's own. Ray 0 is dead ahead; ray 4 is 80 degrees to
+        // starboard, which on a screen whose y runs down is below the nose.
+        let world = posed(480.0, 300.0, &[(0, 0.25), (4, 0.9)]);
+        let samples = envelope_samples(&world.agent.ship, &world.agent.inputs);
+        for (slot, index) in ENVELOPE_ORDER.iter().enumerate() {
+            let value = world.agent.inputs[*index] as f32;
+            let bearing = sensors::RAY_OFFSETS_DEG[*index].to_radians() as f32;
+            match samples[slot] {
+                Some(point) => {
+                    // The distance falls straight out of the proximity the
+                    // simulation handed over: a reading of one is a hit at
+                    // zero, and the range is what nothing inside it looks
+                    // like.
+                    let expected = (1.0 - value) * sensors::RANGE as f32;
+                    let radius = point[0].hypot(point[1]);
                     assert!(
-                        (9.0..=10.0).contains(&shown),
-                        "with a fit of {fit} a reading shows at {shown}, not a floor of 9–10"
+                        (radius - expected).abs() < 0.01,
+                        "ray {index} reads {value} but its sample sits at {radius}, not {expected}"
+                    );
+                    let angle = point[1].atan2(point[0]);
+                    assert!(
+                        (angle - bearing).abs() < 1e-4,
+                        "ray {index} is drawn at {angle}, not on its bearing {bearing}"
                     );
                 }
+                // And a bearing that found nothing is not drawn at all. Putting
+                // it out at the range limit would draw an edge five hundred
+                // units away that no reading put there.
+                None => assert_eq!(value, 0.0, "ray {index} read {value} and drew nothing"),
             }
         }
+        assert_eq!(samples.iter().flatten().count(), 2);
+    }
+
+    #[test]
+    fn an_empty_sensorium_draws_nothing_at_all() {
+        // Nine bearings with nothing inside the range is a reading, and the
+        // reading is "no boundary within five hundred units". There is no shape
+        // to draw, and naming an instrument that drew nothing would claim one.
+        let world = posed(480.0, 300.0, &[]);
+        let mut p = Painter::new();
+        p.set_transform(Transform::new(1.0, [0.0, 0.0]));
+        p.set_clip(Some([0.0, 0.0, W, H]));
+        draw_envelope(&mut p, &world.agent.ship, &world.agent.inputs, 1.0);
+        assert!(p.triangles.is_empty(), "the empty field drew geometry");
+        assert!(p.luminous.is_empty(), "the empty field drew light");
+        assert!(p.text.is_empty(), "the empty field named an instrument");
+    }
+
+    #[test]
+    fn the_boundary_walks_its_samples_in_bearing_order_and_never_crosses_a_gap() {
+        // Every bearing reading differently, so the chain is a proper zigzag
+        // rather than a regular polygon: were the samples walked in the
+        // Sensorium's own index order the joins would cross one another.
+        let inputs: Vec<(usize, f64)> = (0..sensors::RAY_OFFSETS_DEG.len())
+            .map(|ray| (ray, 0.15 + ray as f64 * 0.05))
+            .collect();
+        let world = posed(480.0, 300.0, &inputs);
+        let samples = envelope_samples(&world.agent.ship, &world.agent.inputs);
+        // No bearing reads one: a proximity of one is a hit at zero distance,
+        // and its sample lands on the hull where it has no bearing left to be
+        // checked against.
+        assert!(world.agent.inputs[..9].iter().all(|value| *value < 1.0));
+        let step = 40.0_f32.to_radians();
+        let bearing = |point: [f32; 2]| point[1].atan2(point[0]);
+        for pair in samples.windows(2) {
+            let (a, b) = (pair[0].unwrap(), pair[1].unwrap());
+            let turn = (bearing(b) - bearing(a)).rem_euclid(std::f32::consts::TAU);
+            assert!(
+                (turn - step).abs() < 1e-3,
+                "the walk turns by {turn} at a step, not {step}"
+            );
+        }
+        // Every bearing found something, so every neighbour is joined: eight
+        // chords and nine dots.
+        assert_eq!(
+            (0..samples.len())
+                .filter(|slot| boundary_joins(&samples, *slot))
+                .count(),
+            8
+        );
+
+        // A gap in the middle of the chain breaks it: a bearing that read
+        // nothing is not crossed, and the runs either side are drawn as the
+        // separate measurements they are. One bearing missing at slot 4 splits
+        // the chain into slots 0–2 and 5–7, with nothing over the hole.
+        let mut holed = samples;
+        holed[4] = None;
+        let joined: Vec<usize> = (0..holed.len())
+            .filter(|slot| boundary_joins(&holed, *slot))
+            .collect();
+        assert_eq!(joined, vec![0, 1, 2, 5, 6, 7]);
+        assert!(
+            !boundary_joins(&holed, 3) && !boundary_joins(&holed, 4),
+            "a chord was drawn across a bearing that found nothing"
+        );
+    }
+
+    #[test]
+    fn the_boundary_is_drawn_as_a_labelled_reading() {
+        // A Sensorium shut in on every bearing: nine samples ten units out, and
+        // a chain between each neighbouring pair.
+        let inputs: Vec<(usize, f64)> = (0..sensors::RAY_OFFSETS_DEG.len())
+            .map(|ray| (ray, 0.98))
+            .collect();
+        let world = posed(480.0, 300.0, &inputs);
+        let mut p = Painter::new();
+        p.set_transform(Transform::new(1.0, [0.0, 0.0]));
+        p.set_clip(Some([0.0, 0.0, W, H]));
+        // Whatever gain the Painter was left wearing, the drawing restores it.
+        p.set_gain(3.0);
+        draw_envelope(&mut p, &world.agent.ship, &world.agent.inputs, 1.0);
+        assert_eq!(p.gain(), 3.0);
+
+        // The joins are light and the samples are matter, so the boundary reads
+        // where the field is dark and the dots sit over it.
+        assert!(!p.triangles.is_empty() && !p.luminous.is_empty());
+        // Nine dots ten units out and nothing nearer: the region between the
+        // hull and the boundary is *not* filled — there is no measured edge
+        // across the bearings in between to bound it with.
+        let radius =
+            |v: &crate::painter::TriangleVertex| (v.pos[0] - 480.0).hypot(v.pos[1] - 300.0);
+        let expected = 0.02 * sensors::RANGE as f32;
+        let nearest = p.triangles.iter().map(radius).fold(f32::MAX, f32::min);
+        assert!(
+            (nearest - (expected - ENVELOPE_VERTEX_RADIUS)).abs() < 0.1,
+            "the nearest ink sits at {nearest}, not {expected}"
+        );
+        // The joins reach the dots and no further: the nearest lit ink is the
+        // chord's own edge, a half-width inside the samples it joins.
+        let lit = p.luminous.iter().map(radius).fold(f32::MAX, f32::min);
+        assert!(
+            (lit - expected).abs() < 2.0,
+            "the nearest join ink sits at {lit}, not {expected}"
+        );
+
+        // The instrument is named, and the name says what the dots are.
+        let caption = p
+            .text
+            .iter()
+            .find(|item| item.content == ENVELOPE_CAPTION)
+            .expect("the boundary's caption is drawn");
+        // It sits clear of the hull's own instruments, holding the size a
+        // reading in the field is set at.
+        assert!(caption.pos[1] - 300.0 > CHEVRON_REACH);
+        assert!(caption.size >= READOUT_MIN);
     }
 
     #[test]

@@ -49,7 +49,11 @@ pub mod color {
     // ---- type -----------------------------------------------------------
     pub const TEXT: Rgba = Rgba::rgb(0.898, 0.925, 0.949);
     pub const TEXT_DIM: Rgba = Rgba::rgb(0.541, 0.600, 0.659);
-    pub const TEXT_FAINT: Rgba = Rgba::rgb(0.361, 0.412, 0.467);
+    /// The quietest ink the interface prints a *reading* in. It was authored
+    /// at `rgb(0.361, 0.412, 0.467)`, which is about 3.5:1 on the panel — below
+    /// WCAG AA for the 8–10 pt type it carries — so it was lifted until it
+    /// clears 4.5:1. `the_reading_inks_clear_aa_contrast` pins it.
+    pub const TEXT_FAINT: Rgba = Rgba::rgb(0.451, 0.502, 0.557);
 
     // ---- semantic -------------------------------------------------------
     /// Cyan is perception and the instrument's own voice.
@@ -80,6 +84,26 @@ pub mod color {
     pub const ASTEROID_RIM: Rgba = Rgba::rgb(1.0, 0.941, 0.851);
     /// A mid-tone kept for anything that needs "the colour of rock".
     pub const ASTEROID: Rgba = Rgba::rgb(0.322, 0.333, 0.337);
+
+    // ---- the Record -----------------------------------------------------
+    //
+    // A third family, beside perception (cyan) and energy (amber): the run's
+    // own history. It is deliberately not a shade of either, because a series
+    // that is the same ink as the sensorium reads as another live reading
+    // rather than as the record of one. Violet sits far enough from both in
+    // hue and in value to hold two series plus a ghost without a legend doing
+    // the work.
+    /// The breeding score: the series that actually climbs (ADR 0003 keeps it
+    /// named apart from Competence, and the Chart says so on its face).
+    pub const RECORD: Rgba = Rgba::rgb(0.639, 0.588, 0.980);
+    /// The Population's best member, a step above the mean and drawn thinner:
+    /// never shown without the mean beside it.
+    pub const RECORD_PEAK: Rgba = Rgba::rgb(0.910, 0.890, 1.0);
+    /// The previous Generation, kept under the current one so the movement
+    /// between them is the thing the eye reads.
+    pub const RECORD_GHOST: Rgba = Rgba::rgb(0.639, 0.588, 0.980);
+    /// The cleared-Wave share: Competence, so it stays on the perception hue.
+    pub const RECORD_CLEAR: Rgba = ACCENT;
 
     // ---- charts and the Network -----------------------------------------
     pub const BEST: Rgba = ACCENT;
@@ -133,6 +157,85 @@ pub mod light {
     /// Instrument lamps in the chrome: bright enough to read as lit, not
     /// bright enough to smear the text beside them.
     pub const LAMP: f32 = 1.7;
+    /// The shock front an Impact throws: brighter than the flash's own glow
+    /// because the ring is thin, so it has to carry the same energy through
+    /// far fewer fragments.
+    pub const SHOCKWAVE: f32 = 6.5;
+    /// The muzzle light when the Ship fires.
+    pub const MUZZLE: f32 = 5.2;
+    /// The Near Boundary the nine Sensor Rays bound, where a bearing found
+    /// something. Below [`RAY`] on purpose: it is the shape *under* the
+    /// readings, not another reading.
+    pub const ENVELOPE: f32 = 1.7;
+    /// A mote of near dust catching the key light. The dimmest light in the
+    /// Arena: dust is only visible because it moves.
+    pub const DUST: f32 = 1.2;
+}
+
+/// Timing tokens for the whole interface. One place to look up how long
+/// something takes and what shape the curve is.
+///
+/// The durations and the four easing curves are IBM Carbon's motion tokens
+/// (`packages/motion/src/tokens.ts`, Apache-2.0, © IBM), taken as published
+/// values: a *productive* curve leaves and arrives quickly, an *expressive*
+/// one lingers. Use `productive` for anything a person is waiting on and
+/// `expressive` for anything the run is announcing.
+pub mod motion {
+    /// Seconds. A state change the pointer caused.
+    pub const FAST_01: f32 = 0.070;
+    /// Seconds. A small panel rearranging.
+    pub const FAST_02: f32 = 0.110;
+    /// Seconds. A message arriving.
+    pub const MODERATE_01: f32 = 0.150;
+    /// Seconds. A generation handover.
+    pub const MODERATE_02: f32 = 0.240;
+    /// Seconds. A run restarting.
+    pub const SLOW_01: f32 = 0.400;
+    /// Seconds. The longest thing the interface does.
+    pub const SLOW_02: f32 = 0.700;
+
+    /// Control points for a cubic Bézier, `[x1, y1, x2, y2]`, as CSS writes
+    /// them. Every curve starts at (0,0) and ends at (1,1).
+    pub type Curve = [f32; 4];
+
+    pub const STANDARD_PRODUCTIVE: Curve = [0.2, 0.0, 0.38, 0.9];
+    pub const STANDARD_EXPRESSIVE: Curve = [0.4, 0.14, 0.3, 1.0];
+    pub const ENTRANCE_PRODUCTIVE: Curve = [0.0, 0.0, 0.38, 0.9];
+    pub const ENTRANCE_EXPRESSIVE: Curve = [0.0, 0.0, 0.3, 1.0];
+    pub const EXIT_PRODUCTIVE: Curve = [0.2, 0.0, 1.0, 0.9];
+    pub const EXIT_EXPRESSIVE: Curve = [0.4, 0.14, 1.0, 1.0];
+
+    /// One component of a cubic Bézier whose endpoints are 0 and 1.
+    fn bezier(control_a: f32, control_b: f32, t: f32) -> f32 {
+        let u = 1.0 - t;
+        3.0 * u * u * t * control_a + 3.0 * u * t * t * control_b + t * t * t
+    }
+
+    /// The curve's progress at time `x`, both in `0..=1`.
+    ///
+    /// Solved by bisection rather than Newton iteration: it always converges
+    /// here, it is a fixed number of steps however steep the curve is, and it
+    /// is exact arithmetic a test can rely on. Sixty-four steps is far past
+    /// what a colour ramp can show.
+    pub fn ease(curve: Curve, x: f32) -> f32 {
+        let x = x.clamp(0.0, 1.0);
+        // The ends are exact, not approached: a fade that ends at 0.9999 is a
+        // frame of visible ink, and a test can hold these two.
+        if x == 0.0 || x == 1.0 {
+            return x;
+        }
+        let [x1, y1, x2, y2] = curve;
+        let (mut low, mut high) = (0.0f32, 1.0f32);
+        for _ in 0..24 {
+            let mid = 0.5 * (low + high);
+            if bezier(x1, x2, mid) < x {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        bezier(y1, y2, 0.5 * (low + high))
+    }
 }
 
 pub mod font {
@@ -202,6 +305,10 @@ mod tests {
             // interface prints.
             color::BEST,
             color::BAND,
+            // The Record's family, on the same budget as every other ink.
+            color::RECORD,
+            color::RECORD_PEAK,
+            color::RECORD_CLEAR,
         ] {
             for channel in [color.r, color.g, color.b] {
                 assert!((0.0..=1.0).contains(&channel), "{color:?} leaves the gamut");
@@ -218,9 +325,79 @@ mod tests {
             light::CORONA,
             light::RAY,
             light::LAMP,
+            light::SHOCKWAVE,
+            light::MUZZLE,
+            light::ENVELOPE,
+            light::DUST,
         ] {
             assert!(gain > 1.0, "a light written at {gain} would never bloom");
         }
+    }
+
+    /// WCAG 2.2 relative luminance for an sRGB triple.
+    fn relative_luminance(color: Rgba) -> f32 {
+        let channel = |c: f32| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+    }
+
+    /// WCAG 2.2 contrast ratio, 1:1 through 21:1.
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        let (high, low) = if la > lb { (la, lb) } else { (lb, la) };
+        (high + 0.05) / (low + 0.05)
+    }
+
+    #[test]
+    fn the_reading_inks_clear_aa_contrast() {
+        // Every ink the interface prints a *reading* in has to clear WCAG AA
+        // (4.5:1) on the surface it is printed on, at the 8–12 pt sizes the
+        // panels are set in. TEXT_FAINT used to fail this at about 3.5:1.
+        for (ink, name) in [
+            (color::TEXT, "TEXT"),
+            (color::TEXT_DIM, "TEXT_DIM"),
+            (color::TEXT_FAINT, "TEXT_FAINT"),
+            (color::ACCENT, "ACCENT"),
+            (color::RECORD, "RECORD"),
+            (color::RECORD_PEAK, "RECORD_PEAK"),
+        ] {
+            let ratio = contrast(ink, color::PANEL_BG);
+            assert!(ratio >= 4.5, "{name} on PANEL_BG is only {ratio:.2}:1");
+        }
+        // And the three are still three: the quietest ink must be visibly
+        // quieter than the loudest, or the hierarchy collapses.
+        assert!(relative_luminance(color::TEXT_FAINT) < relative_luminance(color::TEXT_DIM));
+        assert!(relative_luminance(color::TEXT_DIM) < relative_luminance(color::TEXT));
+    }
+
+    #[test]
+    fn an_easing_curve_is_monotonic_and_pins_its_ends() {
+        // A curve that ever went backwards would make an animation reverse.
+        for curve in [
+            motion::STANDARD_PRODUCTIVE,
+            motion::STANDARD_EXPRESSIVE,
+            motion::ENTRANCE_PRODUCTIVE,
+            motion::EXIT_PRODUCTIVE,
+        ] {
+            assert_eq!(motion::ease(curve, 0.0), 0.0);
+            assert_eq!(motion::ease(curve, 1.0), 1.0);
+            let mut previous = -1.0;
+            for step in 0..=100 {
+                let value = motion::ease(curve, step as f32 / 100.0);
+                assert!(value >= previous, "{curve:?} reverses at {step}");
+                previous = value;
+            }
+        }
+        // An entrance curve is a fast-then-settling rise: by the midpoint it
+        // has covered more than half its distance.
+        assert!(motion::ease(motion::ENTRANCE_PRODUCTIVE, 0.5) > 0.5);
+        // An exit curve is the opposite: it holds, then falls away late.
+        assert!(motion::ease(motion::EXIT_PRODUCTIVE, 0.5) < 0.5);
     }
 
     #[test]

@@ -13,6 +13,7 @@
 //! the run is identical either way (ADR 0005).
 
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -58,6 +59,10 @@ pub fn run() {
         }
     };
     let mut app = App::new();
+    // The motion switch starts where the system says. The probe runs once,
+    // here, and not in the constructor, so every test that builds an `App`
+    // stays independent of the machine it runs on.
+    app.controls.motion = !system_reduced_motion();
     if let Err(error) = event_loop.run_app(&mut app) {
         eprintln!("NeuroArena stopped: {error}");
         std::process::exit(1);
@@ -79,7 +84,6 @@ struct App {
     /// the offset it was given, which is what makes a paused frame
     /// pixel-identical.
     arena_tremor: [f32; 2],
-    trails: bool,
 
     seed: u32,
     run: Run,
@@ -89,13 +93,26 @@ struct App {
     generation: Option<Arc<Generation>>,
     watched: Option<World>,
     watched_member: usize,
+    /// The watched Episode's outcome, computed the first frame its World is
+    /// done and held until the Generation closes. It is the same value the
+    /// Cohort banks, so the Arena's member appears in the Population
+    /// instrument the moment its Episode ends rather than when the slowest
+    /// member of the Generation does.
+    watched_outcome: Option<EpisodeOutcome>,
     worker: Option<Receiver<Vec<Option<EpisodeOutcome>>>>,
     outcomes: Vec<Option<EpisodeOutcome>>,
+    /// The hundred Agents of this Generation, as they land. Read-only
+    /// presentation state: nothing here can reach the simulation.
+    cohort: crate::cohort::Cohort,
 
     controls: ui::Controls,
     hot: Option<ui::Hit>,
     focus: Option<ui::Hit>,
     pressed: Option<ui::Hit>,
+    /// Set when the press came from Enter rather than from the pointer: a key
+    /// has no button-up of its own, so the frame that shows the press is the
+    /// one that releases it.
+    pressed_by_key: bool,
     cursor: Option<PhysicalPosition<f64>>,
     dragging_slider: bool,
     message: String,
@@ -139,7 +156,6 @@ impl App {
             trail: Trail::default(),
             effects: crate::effects::Effects::default(),
             arena_tremor: [0.0, 0.0],
-            trails: true,
             seed,
             run: Run::with_options(seed, RunOptions::new(config::neat::POP_SIZE, workers)),
             workers,
@@ -147,12 +163,15 @@ impl App {
             generation: None,
             watched: None,
             watched_member: 0,
+            watched_outcome: None,
             worker: None,
             outcomes: Vec::new(),
+            cohort: crate::cohort::Cohort::default(),
             controls,
             hot: None,
             focus: None,
             pressed: None,
+            pressed_by_key: false,
             cursor: None,
             dragging_slider: false,
             message: format!("evolving from seed {seed} · {workers} workers"),
@@ -202,8 +221,10 @@ impl App {
         // The field the next frame draws is the new run's, not the dead one's.
         self.arena_tremor = [0.0, 0.0];
         self.watched = None;
+        self.watched_outcome = None;
         self.worker = None;
         self.outcomes.clear();
+        self.cohort.clear();
         self.banner = None;
         self.best_member_hint = 0;
         self.rate_steps = 0;
@@ -295,7 +316,11 @@ impl App {
         }
         self.watched_member = self.best_member_hint.min(generation.len() - 1);
         self.watched = Some(generation.world(self.watched_member));
+        self.watched_outcome = None;
         self.outcomes = vec![None; generation.len()];
+        // Whatever is complete becomes the ghost the new cloud is read against.
+        self.cohort
+            .begin(self.run.generation(), generation.len(), self.watched_member);
 
         let (sender, receiver) = std::sync::mpsc::channel();
         let workers = self.workers;
@@ -333,21 +358,51 @@ impl App {
         };
         let started = Instant::now();
         let mut stepped = 0u64;
+        let key = (self.run.generation(), self.watched_member);
         if let Some(world) = self.watched.as_mut() {
+            let frame_start = world.time;
             while !world.done && stepped < wanted {
                 world.step_fixed();
-                if self.trails && speed <= 16.0 {
-                    self.effects
-                        .observe((self.run.generation(), self.watched_member), world, true);
-                }
+                // The event language and the ribbon run on every watched step,
+                // at every speed. What a frame keeps of what it ran is decided
+                // by the observation window inside each layer — `settle` below
+                // is what commits it — not by a speed gate here, which is what
+                // made the whole language invisible on a default run.
+                self.trail.observe(key, world, self.controls.motion);
+                self.effects.observe(key, world, self.controls.motion);
                 stepped += 1;
                 if stepped & 255 == 0 && started.elapsed().as_secs_f64() >= SIM_BUDGET {
                     break;
                 }
             }
+            if stepped > 0 {
+                // The frame's own span is the floor the ribbon's window takes,
+                // so at ×100 the ribbon is the frame's flight and not a dot;
+                // and settling the effects commits the final observation
+                // window and publishes the tremor in time to draw it.
+                self.trail.settle(world.time - frame_start);
+                self.effects.settle(self.controls.motion);
+                self.arena_tremor = self.effects.shake();
+            }
         }
         self.rate_steps += stepped;
         crate::gpu::take_error();
+
+        // The watched Episode banks the moment it ends rather than when the
+        // slowest member of the Generation does. It is the same outcome
+        // `finish_generation` will hand the Run, computed once.
+        if self.watched_outcome.is_none() {
+            let settled = match (self.generation.as_ref(), self.watched.as_ref()) {
+                (Some(generation), Some(world)) if world.done => {
+                    Some(generation.outcome(self.watched_member, world))
+                }
+                _ => None,
+            };
+            if let Some(outcome) = settled {
+                self.cohort.record(self.watched_member, &outcome);
+                self.watched_outcome = Some(outcome);
+            }
+        }
 
         // 2. Collect the rest of the Population.
         if let Some(receiver) = &self.worker {
@@ -360,6 +415,7 @@ impl App {
                         .sum::<u64>();
                     for (index, outcome) in results.into_iter().enumerate() {
                         if let Some(outcome) = outcome {
+                            self.cohort.record(index, &outcome);
                             self.outcomes[index] = Some(outcome);
                         }
                     }
@@ -396,8 +452,11 @@ impl App {
             return;
         };
         if let Some(world) = self.watched.take() {
-            self.outcomes[self.watched_member] =
-                Some(generation.outcome(self.watched_member, &world));
+            let outcome = self
+                .watched_outcome
+                .take()
+                .unwrap_or_else(|| generation.outcome(self.watched_member, &world));
+            self.outcomes[self.watched_member] = Some(outcome);
         }
         let outcomes: Option<Vec<EpisodeOutcome>> =
             self.outcomes.iter_mut().map(|slot| slot.take()).collect();
@@ -548,6 +607,7 @@ impl App {
             }
             ui::Hit::Pause => self.controls.paused = !self.controls.paused,
             ui::Hit::Rays => self.controls.rays = !self.controls.rays,
+            ui::Hit::Motion => self.controls.motion = !self.controls.motion,
             ui::Hit::Restart => {
                 let seed = self.seed;
                 let watching = self.loaded.clone();
@@ -606,7 +666,11 @@ impl App {
                     ));
                     self.on_press();
                     self.cursor = cursor;
-                    self.pressed = None;
+                    // The press stays on the control for the frame it asked
+                    // for; `draw` releases it once that frame is filled. The
+                    // old code cleared it here, before any frame could show
+                    // that the keyboard had pressed anything at all.
+                    self.pressed_by_key = true;
                     self.dragging_slider = false;
                 }
             }
@@ -660,7 +724,7 @@ impl App {
                 }
                 match text.to_lowercase().as_str() {
                     "m" => {
-                        self.trails = !self.trails;
+                        self.controls.motion = !self.controls.motion;
                         self.trail.clear();
                         self.effects.clear();
                         self.arena_tremor = [0.0, 0.0];
@@ -701,25 +765,24 @@ impl App {
         // sidebar leaves; the panels stay at 1:1 and stay legible (ADR 0006).
         let arena_view = observatory::arena_view(layout.arena, dpr);
         if let Some(world) = self.watched.as_ref() {
-            // The tremor the frame draws with is the one the frame before it
-            // observed; the offset is on the view, not on global state.
+            // The tremor is the offset the frame's own observation published;
+            // a frame that ran no steps keeps the one it was given, which is
+            // what makes a paused frame pixel-identical.
             let view = crate::scene::ArenaView {
                 tremor: self.arena_tremor,
                 ..arena_view
             };
-            self.trail.observe(
-                (self.run.generation(), self.watched_member),
+            // The draw path only reads: both layers were told what the frame's
+            // steps did by `advance`, and the ribbon and the lights they hold
+            // are what this frame shows of it.
+            scene::draw_arena(
+                painter,
                 world,
-                self.trails,
+                view,
+                self.controls.rays,
+                self.controls.motion,
             );
-            scene::draw_arena(painter, world, view, self.controls.rays, self.trails);
             self.trail.draw(painter, view);
-            self.effects.observe(
-                (self.run.generation(), self.watched_member),
-                world,
-                self.trails && self.controls.speed <= 16.0,
-            );
-            self.arena_tremor = self.effects.shake();
             self.effects.draw(painter, view);
         }
         painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
@@ -731,7 +794,7 @@ impl App {
             world,
             self.seed,
             &self.controls,
-            self.trails,
+            self.controls.motion,
         );
         let info = panels::HudInfo {
             seed: self.seed,
@@ -757,7 +820,7 @@ impl App {
             watching: self.run.is_watching(),
         };
         panels::draw_hud(painter, layout.hud, &info);
-        panels::draw_chart(painter, layout.chart, self.run.history());
+        panels::draw_record(painter, layout.record, self.run.history(), &self.cohort);
         if let Some(world) = world {
             if let Some(network) = world.agent.network() {
                 let index = self
@@ -773,8 +836,10 @@ impl App {
             draw_focus_ring(painter, ui::focus_ring(layout.control_rect(hit)));
         }
         if let Some(hit) = self.pressed {
-            let r = layout.control_rect(hit);
-            painter.rect(r.x, r.y, r.w, r.h, theme::color::ACCENT.alpha(0.12));
+            // The press overlay is the panel's own drawing now: a key fires
+            // differently from a field being entered and from a slider being
+            // grabbed, and each shape belongs with the control it belongs to.
+            panels::draw_press(painter, &layout, &self.controls, hit);
         }
         let (status, is_error) = match crate::gpu::take_error() {
             Some(error) => (error, true),
@@ -782,11 +847,17 @@ impl App {
         };
         panels::draw_status(painter, layout.status, &status, is_error);
         if let Some((text, remaining)) = self.banner.as_ref() {
-            let shown = BANNER_SECONDS - remaining;
-            let fade = (shown / BANNER_FADE_IN)
-                .min(remaining / BANNER_FADE_OUT)
-                .clamp(0.0, 1.0);
-            let alpha = if self.trails { fade as f32 } else { 1.0 };
+            // The shell owns the clock — it is the one place that sees wall
+            // time — and the panel owns the shapes the banner is made of, so
+            // the fade is one curve the shell hands over: in on the entrance
+            // curve, out on the exit one.
+            let fade = panels::banner_fade(
+                BANNER_SECONDS - remaining,
+                BANNER_SECONDS,
+                BANNER_FADE_IN,
+                BANNER_FADE_OUT,
+            );
+            let alpha = if self.controls.motion { fade } else { 1.0 };
             panels::draw_banner(
                 painter,
                 layout.arena,
@@ -808,6 +879,12 @@ impl App {
             return;
         }
         let frame = self.build_frame();
+        // A keypress is shown in the frame it asked for and released after it:
+        // the pointer's press ends on the button-up, and this is the keyboard's.
+        if self.pressed_by_key {
+            self.pressed_by_key = false;
+            self.pressed = None;
+        }
 
         let (Some(gpu), Some(renderer)) = (self.gpu.as_ref(), self.renderer.as_mut()) else {
             return;
@@ -912,6 +989,33 @@ fn fresh_seed() -> u32 {
         .map(|duration| duration.subsec_nanos() ^ duration.as_secs() as u32)
         .unwrap_or(0);
     nanos.max(1)
+}
+
+/// The system's own Reduce Motion preference, read once when the app starts
+/// and honoured by starting the motion switch where it says. It is a snapshot,
+/// not a notification: the preference is read before the window opens, and
+/// changing it while the app runs takes effect on the next launch. The `m` key
+/// still overrides it either way. Every failure — no `defaults`, no such key, a
+/// machine that is not a Mac — reads as "not reduced", because a probe that
+/// cannot answer must not take the motion away from someone who did not ask
+/// for it.
+fn system_reduced_motion() -> bool {
+    let output = Command::new("defaults")
+        .args(["read", "com.apple.universalaccess", "reduceMotion"])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            parse_reduced_motion(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => false,
+    }
+}
+
+/// What the preference read means: `1` or `true`, in any case and trimmed, is
+/// on; anything else — `0`, `false`, an empty read, a surprise — is off. Split
+/// out from the probe so the decision can be tested without a subprocess.
+fn parse_reduced_motion(stdout: &str) -> bool {
+    matches!(stdout.trim().to_ascii_lowercase().as_str(), "1" | "true")
 }
 
 impl ApplicationHandler for App {
@@ -1184,7 +1288,7 @@ mod tests {
             "'r' toggles Rays once the field is left"
         );
         press(&mut app, character("m"));
-        assert!(!app.trails, "'m' toggles Trails too");
+        assert!(!app.controls.motion, "'m' toggles motion too");
 
         // Tab reaches the field and puts the caret in it.
         app.focus = None;
@@ -1220,9 +1324,9 @@ mod tests {
         press(&mut app, character("r"));
         assert_ne!(app.controls.rays, rays, "'r' toggles Rays");
 
-        let trails = app.trails;
+        let motion = app.controls.motion;
         press(&mut app, character("m"));
-        assert_ne!(app.trails, trails, "'m' toggles Trails");
+        assert_ne!(app.controls.motion, motion, "'m' toggles motion");
 
         // The pin is "the arm still exists and speaks", not "the IO
         // succeeded": the observable is the status line, which changes
@@ -1325,5 +1429,84 @@ mod tests {
         );
         app.draw();
         assert!(!app.wants_redraw());
+    }
+
+    /// Put a bullet that is about to strike a rock into the watched World: the
+    /// same setup the effects tests use, so the next step records exactly one
+    /// Impact.
+    fn arm_hit(app: &mut App) {
+        let world = app.watched.as_mut().expect("a generation is running");
+        world.agent.ship.x = 100.0;
+        world.agent.ship.y = 100.0;
+        world.asteroids.clear();
+        world.asteroids.push(sim::Asteroid::new(
+            sim::config::asteroid::Size::Large,
+            500.0,
+            500.0,
+            0.0,
+            0.0,
+            &mut sim::Rng::from_seed(2),
+        ));
+        world.bullets.clear();
+        world.bullets.push(sim::Bullet {
+            x: 500.0,
+            y: 500.0,
+            vx: 0.0,
+            vy: 0.0,
+            life: 1.0,
+        });
+    }
+
+    #[test]
+    fn the_event_language_reaches_a_default_speed_frame() {
+        // The default speed is ×100 and the old gate turned the whole event
+        // language off above ×16, so a default run drew no impact, no pulse, no
+        // ember and no tremor at all. This is the wiring's end-to-end pin: the
+        // frame's steps observe, the window keeps the hit, and the frame draws
+        // the light it caused.
+        let mut app = app();
+        app.config = Some(configuration(1280, 800));
+        app.ready = true;
+        app.start_generation();
+        arm_hit(&mut app);
+        // ×100 for twelve steps: 0.2 s of simulation, all of it inside the
+        // observation window, with the hit on the first step.
+        app.advance(12.0 * sim::DT / 100.0);
+        assert!(
+            app.effects.trauma() > 0.0,
+            "the hit did not reach the frame's record at ×100"
+        );
+        assert_ne!(
+            app.arena_tremor,
+            [0.0, 0.0],
+            "the field was struck and did not move"
+        );
+        app.draw();
+        let lit = app.painter.luminous.len();
+        // The same frame with the light taken away: the difference is the
+        // event language, drawn.
+        app.controls.motion = false;
+        app.effects.clear();
+        app.trail.clear();
+        app.arena_tremor = [0.0, 0.0];
+        app.draw();
+        assert!(
+            lit > app.painter.luminous.len(),
+            "the impact's light is not in the frame"
+        );
+    }
+
+    #[test]
+    fn the_reduce_motion_read_means_what_it_says() {
+        // `defaults` prints the value it read; these are the shapes it really
+        // prints. On means motion off; anything a failed read could leave —
+        // an empty string, a key that does not exist — must not take the
+        // motion away.
+        for on in ["1", "1\n", " true ", "TRUE", "True"] {
+            assert!(parse_reduced_motion(on), "{on:?} reads as reduce motion");
+        }
+        for off in ["0", "0\n", "false", "FALSE", "", "\n", "2", "yes"] {
+            assert!(!parse_reduced_motion(off), "{off:?} does not");
+        }
     }
 }

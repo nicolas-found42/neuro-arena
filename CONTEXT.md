@@ -54,7 +54,15 @@ Neuroevolution playground that evolves neural-network pilots to survive an Aster
 
 **HUD**: Overlay panel showing Generation, member index, time, Wave, gate state, and the current Fitness as a number. _Avoid_: stats, info bar
 
-**Chart**: Sparkline of the headline Competence per Generation — the Population's mean Waves, tie-broken by alive time. _Avoid_: graph, fitness chart
+**Record**: The sidebar panel that reads the run at two scales — this Generation's Population as a cloud of members, and every Generation's shaped Fitness as a curve with the cleared share beside it. _Avoid_: graph, chart, stats panel
+
+**Cohort**: The members of one Generation as the app records them while their Episodes land, each reduced to alive time, coverage, Fitness, Wave and novelty. _Avoid_: population, batch, group
+
+**Ghost**: The previous Generation's Cohort, kept behind the current one so the movement between them is what the eye reads. _Avoid_: history, shadow, baseline
+
+**Near Boundary**: The broken line joining the Sensor Ray readings that found something — where the nearest edge is, on the bearings that actually met it. _Avoid_: free-space envelope, lidar, contour
+
+**Reduced Motion**: The Motion key: no trails, no collision echoes and no field tremor. Every reading stays; only what moves without the simulation stops. Seeded from the system's Reduce Motion setting. _Avoid_: trails toggle, quiet mode
 
 **Deep Field**: The lit volume behind the Arena — the wash, the baked nebulae and the starfield the entities are drawn in front of. _Avoid_: background, void, backdrop image
 

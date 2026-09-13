@@ -315,6 +315,27 @@ impl Painter {
         }
     }
 
+    /// The same polygon as light: additive, with each vertex carrying its own
+    /// colour, written past white by the Painter's gain.
+    ///
+    /// This is the primitive that lets a *gradient* be light. Before it, light
+    /// with a falloff had to be banded into flat steps — the Wave pulse is four
+    /// strips for exactly this reason — or approximated by stacked rings. A
+    /// shock front, a ribbon and a plume all want one additive ramp, and this
+    /// is it.
+    pub fn luminous_gradient_polygon(&mut self, points: &[[f32; 2]], colors: &[Rgba]) {
+        if points.len() < 3 || colors.len() != points.len() {
+            return;
+        }
+        for index in 1..points.len() - 1 {
+            self.luminous_gradient_triangle([
+                (points[0], colors[0]),
+                (points[index], colors[index]),
+                (points[index + 1], colors[index + 1]),
+            ]);
+        }
+    }
+
     /// A filled convex polygon, fan-triangulated from its first vertex.
     pub fn polygon(&mut self, points: &[[f32; 2]], color: Rgba) {
         if points.len() < 3 {

@@ -106,6 +106,10 @@ pub fn focus_ring(face: Rect) -> Rect {
 pub enum Hit {
     Pause,
     Rays,
+    /// Reduced motion: the one control that is about the window rather than the
+    /// run. It is on the strip because the alternative — a hotkey documented
+    /// only in the README — is not an option a person can find.
+    Motion,
     Restart,
     NewSeed,
     Save,
@@ -116,9 +120,10 @@ pub enum Hit {
 }
 
 /// Keyboard traversal follows the visual reading order of the control strip.
-pub const FOCUS_ORDER: [Hit; 9] = [
+pub const FOCUS_ORDER: [Hit; 10] = [
     Hit::Pause,
     Hit::Rays,
+    Hit::Motion,
     Hit::Evolve,
     Hit::Restart,
     Hit::NewSeed,
@@ -128,19 +133,26 @@ pub const FOCUS_ORDER: [Hit; 9] = [
     Hit::SpeedSlider,
 ];
 
-/// The five stacked sidebar panels, top to bottom: HUD, Chart, Network,
+/// The five stacked sidebar panels, top to bottom: HUD, Record, Network,
 /// Controls, Status.
 const PANELS: usize = 5;
 
-/// Their natural heights. With the margins and gaps paid, the whole stack fits a
-/// 700-pixel-tall window without shrinking anything.
-const NATURAL: [f32; PANELS] = [216.0, 120.0, 180.0, 154.0, 40.0];
+/// Their natural heights. With the margins and gaps paid, the whole stack fits
+/// an 890-pixel-tall window without shrinking anything.
+///
+/// The Record is the tall one because it carries two registers — the current
+/// Generation's cloud and the run's curve — where every other panel carries
+/// one. The spare height in a taller window still goes to the Network: the
+/// Record has a natural size and a bigger box only spreads its cloud thinner.
+const NATURAL: [f32; PANELS] = [206.0, 240.0, 178.0, 154.0, 40.0];
 
-/// The height each panel gives way to before the next one shrinks.
-const MINIMUM: [f32; PANELS] = [160.0, 56.0, 96.0, 140.0, 26.0];
+/// The height each panel gives way to before the next one shrinks. The Record's
+/// floor is where the run's curve still has an axis: below that the cloud is
+/// the panel and the curve is named away.
+const MINIMUM: [f32; PANELS] = [160.0, 118.0, 96.0, 140.0, 26.0];
 
 /// Shrink order once the stack no longer fits: the Network gives way first, then
-/// the Chart, then the furniture.
+/// the Record, then the furniture.
 const SHRINK: [usize; PANELS] = [2, 1, 0, 3, 4];
 
 /// Where every panel and every control sits for a window of a given size.
@@ -152,12 +164,15 @@ pub struct Layout {
     /// The docked column that holds every panel.
     pub sidebar: Rect,
     pub hud: Rect,
-    pub chart: Rect,
+    /// The Record: this Generation's Population, and every Generation's score.
+    pub record: Rect,
     pub network: Rect,
     pub controls: Rect,
     pub status: Rect,
     pub pause: Rect,
     pub rays: Rect,
+    /// The reduced-motion key.
+    pub motion: Rect,
     pub restart: Rect,
     pub new_seed: Rect,
     pub save: Rect,
@@ -191,7 +206,7 @@ impl Layout {
             rect
         };
         let hud = place(0);
-        let chart = place(1);
+        let record = place(1);
         let network = place(2);
         let controls = place(3);
         let status = place(4);
@@ -201,12 +216,13 @@ impl Layout {
             arena,
             sidebar,
             hud,
-            chart,
+            record,
             network,
             controls,
             status,
             pause: strip.pause,
             rays: strip.rays,
+            motion: strip.motion,
             restart: strip.restart,
             new_seed: strip.new_seed,
             save: strip.save,
@@ -221,6 +237,7 @@ impl Layout {
         match hit {
             Hit::Pause => self.pause,
             Hit::Rays => self.rays,
+            Hit::Motion => self.motion,
             Hit::Restart => self.restart,
             Hit::NewSeed => self.new_seed,
             Hit::Save => self.save,
@@ -236,6 +253,7 @@ impl Layout {
         [
             (self.pause, Hit::Pause),
             (self.rays, Hit::Rays),
+            (self.motion, Hit::Motion),
             (self.evolve, Hit::Evolve),
             (self.restart, Hit::Restart),
             (self.new_seed, Hit::NewSeed),
@@ -288,6 +306,7 @@ fn stack(available: f32) -> [f32; PANELS] {
 struct Strip {
     pause: Rect,
     rays: Rect,
+    motion: Rect,
     evolve: Rect,
     restart: Rect,
     new_seed: Rect,
@@ -325,9 +344,10 @@ impl Strip {
         let slider_row = Rect::new(inner.x, y, inner.w, slider_h);
 
         Strip {
-            pause: cell(buttons_a, 0, 3),
-            rays: cell(buttons_a, 1, 3),
-            evolve: cell(buttons_a, 2, 3),
+            pause: cell(buttons_a, 0, 4),
+            rays: cell(buttons_a, 1, 4),
+            motion: cell(buttons_a, 2, 4),
+            evolve: cell(buttons_a, 3, 4),
             restart: cell(buttons_b, 0, 4),
             new_seed: cell(buttons_b, 1, 4),
             save: cell(buttons_b, 2, 4),
@@ -354,6 +374,11 @@ fn cell(row: Rect, index: usize, count: usize) -> Rect {
 pub struct Controls {
     pub paused: bool,
     pub rays: bool,
+    /// Trails, collision echoes and the field's tremor — everything that moves
+    /// without the simulation moving. Off is the restrained frame: every
+    /// reading stays, nothing animates. It is seeded from the system's own
+    /// Reduce Motion setting at startup and the Motion key toggles it.
+    pub motion: bool,
     /// Simulated seconds per wall second; `SPEED_MAX` means "as fast as the
     /// machine allows".
     pub speed: f64,
@@ -370,6 +395,7 @@ impl Default for Controls {
         Self {
             paused: false,
             rays: false,
+            motion: true,
             speed: 100.0,
             seed_text: String::new(),
             seed_editing: false,
@@ -455,7 +481,7 @@ mod tests {
             ("arena", layout.arena),
             ("sidebar", layout.sidebar),
             ("hud", layout.hud),
-            ("chart", layout.chart),
+            ("record", layout.record),
             ("network", layout.network),
             ("controls", layout.controls),
             ("status", layout.status),
@@ -501,7 +527,7 @@ mod tests {
             let siblings = [
                 ("arena", layout.arena),
                 ("hud", layout.hud),
-                ("chart", layout.chart),
+                ("record", layout.record),
                 ("network", layout.network),
                 ("controls", layout.controls),
                 ("status", layout.status),
@@ -533,6 +559,7 @@ mod tests {
             let targets = [
                 (Hit::Pause, layout.pause),
                 (Hit::Rays, layout.rays),
+                (Hit::Motion, layout.motion),
                 (Hit::Restart, layout.restart),
                 (Hit::NewSeed, layout.new_seed),
                 (Hit::Save, layout.save),
@@ -568,7 +595,7 @@ mod tests {
         assert_eq!(huge.sidebar.w, SIDEBAR_WIDTH);
         for (name, rect, other) in [
             ("hud", normal.hud, huge.hud),
-            ("chart", normal.chart, huge.chart),
+            ("record", normal.record, huge.record),
             ("network", normal.network, huge.network),
             ("controls", normal.controls, huge.controls),
             ("pause", normal.pause, huge.pause),
@@ -593,7 +620,7 @@ mod tests {
     fn a_tall_window_gives_spare_height_to_network_inspection() {
         let layout = Layout::new(1200.0, 900.0);
         assert_eq!(layout.hud.h, NATURAL[0]);
-        assert_eq!(layout.chart.h, NATURAL[1]);
+        assert_eq!(layout.record.h, NATURAL[1]);
         assert!(layout.network.h > NATURAL[2]);
         assert!((layout.status.bottom() - 888.0).abs() < 0.01);
         assert_eq!(layout.controls.h, NATURAL[3]);
@@ -604,18 +631,34 @@ mod tests {
     }
 
     #[test]
-    fn a_short_window_shrinks_the_network_first_then_the_chart() {
-        let middling = Layout::new(1200.0, 740.0);
-        assert!(
-            middling.network.h < NATURAL[2],
-            "the Network gives way first"
-        );
-        assert_eq!(middling.chart.h, NATURAL[1], "the Chart holds its height");
-        assert_eq!(middling.hud.h, NATURAL[0], "the HUD holds its height");
+    fn a_short_window_shrinks_the_network_first_then_the_record() {
+        // The exact height at which the Network has just reached its floor and
+        // nothing else has moved — derived from the tokens so it cannot drift.
+        let network_floor_height =
+            MARGIN * 2.0 + GAP * (PANELS as f32 - 1.0) + NATURAL.iter().sum::<f32>()
+                - (NATURAL[2] - MINIMUM[2]);
 
-        let cramped = Layout::new(1200.0, 500.0);
-        assert!(cramped.network.h < middling.network.h);
-        assert!(cramped.chart.h < NATURAL[1], "then the Chart gives way too");
+        let roomy = Layout::new(1200.0, 900.0);
+        assert_eq!(roomy.record.h, NATURAL[1]);
+        assert!(roomy.network.h >= NATURAL[2]);
+
+        let middling = Layout::new(1200.0, network_floor_height);
+        assert_eq!(
+            middling.network.h, MINIMUM[2],
+            "the Network gives way first and bottoms out"
+        );
+        assert_eq!(
+            middling.record.h, NATURAL[1],
+            "while the Record is still whole"
+        );
+
+        let cramped = Layout::new(1200.0, 700.0);
+        assert!(
+            cramped.record.h < NATURAL[1],
+            "then the Record gives way too"
+        );
+        assert!(cramped.record.h >= MINIMUM[1], "but never below its floor");
+        assert_eq!(cramped.hud.h, NATURAL[0], "and the HUD still holds");
     }
 
     #[test]
