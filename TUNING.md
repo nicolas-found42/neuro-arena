@@ -392,6 +392,119 @@ condition               alive med   wave med   wave mean   clear >=1   rocks mea
 - Caveat carried forward: this is one champion over twenty Episodes. Enough to
   refuse a Candidate; not enough to claim memory is useless everywhere.
 
+## The Sensorium Candidate: thirteen Sensor Rays and three Threat Slots (2026-09-12, #9)
+
+**Verdict: the screen fails — nine seeds of ten regressed, the median paired
+delta in mean Waves is −0.1430, and no seed improved.**
+**Decision: the Candidate is closed and its patch is discarded (2026-09-12).**
+ADR 0007 says the default changes only when a Candidate clears the bar, and
+nothing here came near it: zero seeds of ten improved. `main` keeps the
+21-input Sensorium, so this entry records a measurement and a refusal, not a
+change. The implementation is deleted rather than parked, the same way the
+memory Candidate of entry #8 was refused with no code left behind: the
+alternatives it explored are a layout change, and this entry records their shape
+and their number for whoever tries them again.
+
+The Candidate was ADR 0009's Sensorium repair. Nine Sensor Rays at 40° spacing
+become thirteen at 27.7°, which lifts the guaranteed detection radius from
+2.92·r to 4.18·r — for Large / Medium / Small Asteroids, 111 / 61 / 32 px
+becomes 159 / 88 / 46 px. The single tracked Asteroid and the stale
+second-nearest closeness input become three Threat Slots, each carrying bearing,
+closeness, closing rate, lateral rate and size for one of the three nearest
+Asteroids. The Sensorium goes from 21 inputs to 34, and the founding Body Plan
+from 26 nodes / 105 connections to 39 nodes / 170 connections.
+
+Method: the ADR 0007 screen — 10 seeds × 300 Generations at Population 500,
+paired seed by seed against the default. The baseline was re-run from the same
+sources that produced entry #7 and reproduced it byte for byte (headline 0.4660,
+4,213,110,680 steps), so the paired comparison rests on a baseline the log
+already carried.
+
+```
+$ neuroarena-sweep --seeds 10 --generations 300 --population 500
+$ neuroarena-sweep --seeds 10 --generations 300 --population 500 --baseline baseline-default.sweep
+# seed     baseline    candidate      delta
+#    1       0.5060       0.5060     0.0000
+#    2       0.4780       0.3140    -0.1640
+#    3       0.3680       0.2360    -0.1320
+#    4       0.4060       0.3620    -0.0440
+#    5       0.4660       0.2720    -0.1940
+#    6       0.3380       0.1840    -0.1540
+#    7       0.4720       0.4160    -0.0560
+#    8       0.5040       0.2200    -0.2840
+#    9       0.3800       0.3180    -0.0620
+#   10       0.4640       0.3080    -0.1560
+# paired 10 of 10 seeds · unpaired: baseline [] · candidate []
+# paired delta of mean Waves: min -0.2840 · median -0.1430 · max 0.0000 · improved 0 · matched 1 · regressed 9
+# verdict: no win — median paired delta -0.1430 (floor 0.0000), regressed 9 of 10 seeds
+#   (provisional screen bar: median delta positive and fewer than half the paired seeds regressed)
+```
+
+The Candidate's own rows, for the shape of the loss:
+
+```
+# seed       meanWave  medWave  p90Wave  clear%  medAliveT         steps
+     1         0.5060        0        1    43.8       60.0     384618392
+     2         0.3140        0        1    29.2       53.4     375148868
+     3         0.2360        0        1    22.6       60.0     364511307
+     4         0.3620        0        1    33.0       53.6     379998395
+     5         0.2720        0        1    26.2       60.0     369265152
+     6         0.1840        0        1    17.4       43.9     363962546
+     7         0.4160        0        1    37.0       59.3     378449423
+     8         0.2200        0        1    21.0       55.5     354411584
+     9         0.3180        0        1    29.6       60.0     377610740
+    10         0.3080        0        1    29.0       60.0     369205644
+   agg  0.3140/0.5060      0/0      1/1    29.2       60.0    3717182051
+# headline — mean Wave across 10 seeds: 0.3140
+```
+
+How to read it:
+
+- **The loss is survival, not a scoring artefact.** The Candidate's Episodes
+  are 12% shorter — 3,717,182,051 steps against 4,213,110,680 — and the share
+  of each Population clearing the first Wave falls from 39.0% to 29.2% at the
+  aggregate. The Ships die sooner and clear less; they do not merely score lower.
+- **One seed is untouched and one is nearly untouched.** Seed 1 matches to the
+  fourth decimal, and seed 4 gives back only 0.0440. Eight seeds give back
+  between 0.0560 and 0.2840. A single unlucky baseline seed would not produce
+  this shape.
+- **Median alive time does not separate the arms** — both read 60.0 s at the
+  aggregate, which is the Wave clock, exactly as entry #7 warns. The Wave-led
+  column is the only one that shows the difference, which is the argument for
+  the mean in the first place.
+- **The rate columns are not comparable.** The Candidate ran while test and app
+  builds competed for cores, so its 3.76M steps/s against the baseline's 7.05M
+  says nothing about the Sensorium. Step *counts* are the comparable figure, and
+  they fall.
+
+### Why it lost — hypotheses, not findings
+
+- **The Body Plan grew 62% while the tuning horizon did not.** The founding
+  Genome carries 170 connections instead of 105. Every Candidate screens over
+  the same 300 Generations, so a larger controller is measured mid-learning.
+  Falsifier: run this Candidate to 1000 Generations and see whether the gap
+  closes or inverts.
+- **More channels dilute the signal at a fixed Population.** Selection pressure
+  and the mutation rates are unchanged while the weight count rises 62%.
+
+Neither was measured. What is measured is the screen's result at Generation 300.
+
+### Consequences
+
+Nothing in the code changed, so the tree is the one entry #7 measured: 21
+inputs, nine Sensor Rays at 40°, one tracked Asteroid, the save format at
+version 1, and the Network panel drawing 21 input dots. Entry #7's rows stay the
+baseline every future Candidate screens against, and the 1-vs-8-worker
+determinism check still passes byte for byte.
+
+The measurement is what survives. On this Arena, with this founding Body Plan,
+these mutation rates and this 300-Generation horizon, the wider Sensorium is
+worse — and the two hypotheses above say where to look first if it is tried
+again. ADR 0009's detection-radius argument is not disproved by the result: the
+geometry is what the geometry is, and the Ships did see more. What the screen
+measures is whether seeing more is worth what it costs to learn. Here it was
+not.
+
 ## Open questions
 
 These are observations, not decisions. Each needs its own entry before a
