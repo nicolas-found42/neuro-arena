@@ -19,10 +19,10 @@ name = "neuroarena-sweep"
 path = "src/bin/sweep.rs"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 # `float_roundtrip` is load-bearing, not a nicety: without it a weight can come
 # back one ULP off, so a reloaded Genome would not be the Genome that was saved.
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
 [lints.rust]
 unsafe_code = "forbid"

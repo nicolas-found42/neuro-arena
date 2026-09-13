@@ -196,24 +196,24 @@ impl Renderer {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("pipeline-layout"),
-                bind_group_layouts: &[&viewport_layout, &glyph_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&viewport_layout), Some(&glyph_layout)],
+                immediate_size: 0,
             });
 
-        let shape_buffers = [wgpu::VertexBufferLayout {
+        let shape_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<TriangleVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &SHAPE_ATTRS,
-        }];
-        let text_buffers = [wgpu::VertexBufferLayout {
+        })];
+        let text_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<TextVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &TEXT_ATTRS,
-        }];
+        })];
 
         let pipeline = |label: &str,
                         topology: wgpu::PrimitiveTopology,
-                        buffers: &[wgpu::VertexBufferLayout],
+                        buffers: &[Option<wgpu::VertexBufferLayout>],
                         vs: &str,
                         fs: &str,
                         blend: bool| {
@@ -254,7 +254,7 @@ impl Renderer {
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
                     }),
-                    multiview: None,
+                    multiview_mask: None,
                     cache: None,
                 })
         };
@@ -356,6 +356,7 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
@@ -364,6 +365,7 @@ impl Renderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_bind_group(0, &self.viewport_bind_group, &[]);
             // Every group in the pipeline layout must be bound before any draw,

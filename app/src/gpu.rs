@@ -5,7 +5,7 @@
 //! device reports why, and a lost device or a validation error is recorded so
 //! the window can show it: a long run must never be lost silently.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use wgpu::util::DeviceExt;
 
@@ -74,6 +74,7 @@ impl Gpu {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .map_err(|error| format!("no usable GPU adapter on this machine: {error}"))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -82,9 +83,10 @@ impl Gpu {
             required_limits: Self::limits(),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
         }))
         .map_err(|error| format!("the GPU refused to open a device: {error}"))?;
-        device.on_uncaptured_error(Box::new(|error| {
+        device.on_uncaptured_error(Arc::new(|error| {
             note_error(format!("GPU error: {error}"));
         }));
         let info = adapter.get_info();
@@ -218,9 +220,11 @@ impl Offscreen {
             }
         });
         gpu.device
-            .poll(wgpu::PollType::Wait)
+            .poll(wgpu::PollType::wait_indefinitely())
             .expect("the device is pollable");
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .expect("the readback buffer is mapped");
         let mut pixels = Vec::with_capacity((unpadded * self.height) as usize);
         for row in 0..self.height {
             let start = (row * padded) as usize;

@@ -635,15 +635,33 @@ impl App {
             return;
         };
         let frame = match surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Outdated => {
                 if let Some(config) = self.config.as_ref() {
                     surface.configure(&gpu.device, config);
                 }
                 return;
             }
-            Err(error) => {
-                crate::gpu::note_error(format!("the window surface failed: {error}"));
+            wgpu::CurrentSurfaceTexture::Lost => {
+                if let (Some(window), Some(config)) = (self.window.as_ref(), self.config.as_ref()) {
+                    match gpu.instance.create_surface(window.clone()) {
+                        Ok(surface) => {
+                            surface.configure(&gpu.device, config);
+                            self.surface = Some(surface);
+                        }
+                        Err(error) => {
+                            crate::gpu::note_error(format!(
+                                "could not recreate the window surface: {error}"
+                            ));
+                        }
+                    }
+                }
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Validation => {
+                crate::gpu::note_error("the window surface failed validation");
                 return;
             }
         };
@@ -663,7 +681,7 @@ impl App {
             },
         );
         // A frame that is dropped instead of presented leaves a blank window.
-        frame.present();
+        gpu.queue.present(frame);
     }
 
     fn tick(&mut self) {
@@ -726,11 +744,9 @@ impl ApplicationHandler for App {
             }
         };
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            flags: wgpu::InstanceFlags::default(),
-            backend_options: wgpu::BackendOptions::default(),
-        });
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
+            Box::new(event_loop.owned_display_handle()),
+        ));
         let surface = match instance.create_surface(window.clone()) {
             Ok(surface) => surface,
             Err(error) => {
@@ -759,6 +775,7 @@ impl ApplicationHandler for App {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             desired_maximum_frame_latency: 2,
             alpha_mode: capabilities.alpha_modes[0],
             view_formats: vec![],

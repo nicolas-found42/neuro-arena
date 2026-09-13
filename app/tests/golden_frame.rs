@@ -127,11 +127,7 @@ impl Frame {
 }
 
 fn render(world: &World, show_rays: bool) -> Frame {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        flags: wgpu::InstanceFlags::default(),
-        backend_options: wgpu::BackendOptions::default(),
-    });
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let gpu = Gpu::new(instance, None)
         .expect("rendering a frame needs a GPU adapter; this test cannot run without one");
     let target = Offscreen::new(&gpu, WIDTH, HEIGHT, wgpu::TextureFormat::Rgba8UnormSrgb);
