@@ -86,6 +86,7 @@ fn main() {
         &world,
         observatory::arena_view(layout.arena, dpr),
         true,
+        true,
     );
     trail.draw(&mut painter, observatory::arena_view(layout.arena, dpr));
     effects.draw(&mut painter, observatory::arena_view(layout.arena, dpr));

@@ -43,6 +43,22 @@ pub mod color {
     pub const BUTTON_HOT: Rgba = Rgba::rgb(0.149, 0.282, 0.322);
     pub const BUTTON_ON: Rgba = Rgba::rgb(0.102, 0.365, 0.408);
     pub const FIELD: Rgba = Rgba::rgb(0.031, 0.063, 0.086);
+    // Deep-field backdrop: the Arena is a place, not a void. Nebulae are
+    // additive light at low alpha; the vignette deepens the frame's edges.
+    pub const NEBULA_A: Rgba = Rgba::rgb(0.235, 0.322, 0.478);
+    pub const NEBULA_B: Rgba = Rgba::rgb(0.110, 0.365, 0.412);
+    pub const VIGNETTE: Rgba = Rgba::rgb(0.004, 0.012, 0.020);
+    pub const STAR_BRIGHT: Rgba = Rgba::rgba(0.878, 0.949, 1.0, 0.9);
+
+    // Materials: one key light, from the upper left.
+    pub const ASTEROID_LIT: Rgba = Rgba::rgb(0.463, 0.549, 0.580);
+    pub const ASTEROID_UNLIT: Rgba = Rgba::rgb(0.125, 0.180, 0.208);
+
+    // Light for the additive pass, where alpha carries intensity. Light that
+    // shares its hue with matter (SHIP, BULLET, SHIP_FLAME, ACCENT) reuses
+    // those tokens instead of duplicating them here.
+    pub const LIGHT_FLAME_CORE: Rgba = Rgba::rgb(1.0, 0.973, 0.639);
+    pub const LIGHT_IMPACT: Rgba = Rgba::rgb(1.0, 0.867, 0.529);
 }
 
 pub mod font {

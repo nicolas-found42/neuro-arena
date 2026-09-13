@@ -5,12 +5,18 @@
 //! at any window size. Nothing here measures text — the renderer shapes it and
 //! resolves alignment — so panels size boxes from the monospace advance and let
 //! the Painter place the glyphs.
+//!
+//! The chrome is a language rather than decoration: an accent tick marks a
+//! section's title, a hairline fading to nothing separates one reading from the
+//! next, and brackets in the corners say "instrument" without words. Cyan stays
+//! perception and positive, amber stays energy and warning, white stays numbers;
+//! chrome never names a measurement, so none of it can be read as telemetry.
 
 use sim::config::gate::STAGNATION_LIMIT;
 use sim::config::nn;
 use sim::{Competence, CompetenceGate, GenerationStats, Genome, Network, NodeType};
 
-use crate::painter::{Align, Painter, Rgba};
+use crate::painter::{Align, Painter, Rgba, Typeface};
 use crate::theme::{color, font, layout};
 use crate::ui::{Controls, Hit, Layout, Rect, PANEL_PAD, TITLE_GAP, TITLE_H};
 
@@ -35,6 +41,41 @@ const HIDDEN_SUMMARY_H: f32 = 12.0;
 /// The five outputs, in `Network::output_ids` order — left, right, thrust, fire,
 /// memory (`config::nn::OUTPUT_IDS`).
 const OUTPUT_NAMES: [&str; 5] = ["left", "right", "thrust", "fire", "memory"];
+
+/// The section tick every panel heading wears, and how far the heading moves
+/// right to clear it — within the same pad, so the panel's own geometry holds.
+const TICK_W: f32 = 3.0;
+const TICK_H: f32 = 10.0;
+const TITLE_INSET: f32 = 8.0;
+
+/// The corner brackets: 8-pixel arms, a hairline and a half thick, set just
+/// inside the panel's border so the border stays the panel's edge.
+const BRACKET_ARM: f32 = 8.0;
+const BRACKET_WEIGHT: f32 = 1.5;
+const BRACKET_INSET: f32 = 4.0;
+
+/// The heading hairline: full strength at the left, nothing at the right.
+const RULE_ALPHA: f32 = 0.9;
+
+/// The HUD's headline bar, and the lane the Generation number keeps clear for it.
+const HUD_BAR_W: f32 = 3.0;
+const HUD_BAR_H: f32 = 28.0;
+const HUD_NUMBER_INSET: f32 = 8.0;
+
+/// The Chart's area fill: brightest where it meets the mean curve, all but gone
+/// where it meets the floor.
+const AREA_TOP: f32 = 0.28;
+const AREA_FLOOR: f32 = 0.02;
+
+/// The speed slider's fill: full at the track's base, easing back to the fader,
+/// so the groove reads as lit travel rather than a progress bar.
+const FILL_AT_BASE: f32 = 0.55;
+const FILL_AT_THUMB: f32 = 0.25;
+
+/// The speed slider's thumb: a fader bar, not a knob, with a light of its own.
+const THUMB_W: f32 = 2.0;
+const THUMB_H: f32 = 10.0;
+const THUMB_GLOW: f32 = 4.0;
 
 /// Everything the HUD reads, gathered by the app shell each frame.
 pub struct HudInfo<'a> {
@@ -79,8 +120,11 @@ pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
         color::TEXT_DIM,
         "SHAPED FITNESS",
     );
+    // The run's headline number wears the same section bar the panel titles do,
+    // at the scale of what it marks.
+    painter.rect(body.x, body.y + 13.0, HUD_BAR_W, HUD_BAR_H, color::ACCENT);
     painter.text(
-        [body.x, body.y + 13.0],
+        [body.x + HUD_NUMBER_INSET, body.y + 13.0],
         28.0,
         color::TEXT,
         format!("{:03}", info.generation),
@@ -108,6 +152,11 @@ pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
         ("Measured rate", Controls::speed_label(info.measured_rate)),
     ];
     let mut y = body.y + 48.0;
+    // The headline block above, the detail rows below: the spacing already said
+    // so, and the hairline says it in ink.
+    if y <= body.bottom() {
+        painter.rect(body.x, y - 4.0, body.w, 1.0, color::PANEL_BORDER.alpha(0.5));
+    }
     for (label, value) in rows {
         if y + 13.0 > body.bottom() {
             return;
@@ -147,20 +196,20 @@ pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
         );
         return;
     }
-    painter.line([body.x, y], [body.right(), y], color::PANEL_BORDER);
+    painter.rect(body.x, y, body.w, 1.0, color::PANEL_BORDER.alpha(0.5));
     y += 5.0;
     painter.text([body.x, y], font::SMALL, color::TEXT_DIM, "COMPETENCE");
     painter.text_aligned(
         [body.right() - 72.0, y],
         font::SMALL,
-        color::TEXT_DIM,
+        color::PANEL_TITLE,
         Align::Right,
         "LIVE",
     );
     painter.text_aligned(
         [body.right(), y],
         font::SMALL,
-        color::TEXT_DIM,
+        color::PANEL_TITLE,
         Align::Right,
         "BEST",
     );
@@ -259,6 +308,11 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
             color::PANEL_BORDER.alpha(0.35),
         );
     }
+    // Two hairlines carry the reading: the top of the range, and the middle of
+    // it. Both are fainter than the frame so the mean stays the subject.
+    for y in [plot.y, plot.y + plot.h * 0.5] {
+        painter.rect(plot.x, y, plot.w, 1.0, color::TEXT_DIM.alpha(0.10));
+    }
     painter.rect_outline(
         plot.x,
         plot.y,
@@ -271,7 +325,7 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         painter.text_aligned(
             [plot.center()[0], line_y(plot.y, plot.h, font::SMALL)],
             font::SMALL,
-            color::TEXT_DIM,
+            color::TEXT_DIM.alpha(0.7),
             Align::Center,
             "Awaiting first Generation",
         );
@@ -314,15 +368,18 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         painter.circle(mean_points[0], 2.5, color::BEST, 12);
     } else {
         for points in mean_points.windows(2) {
-            painter.polygon(
-                &[
-                    points[0],
-                    points[1],
-                    [points[1][0], plot.bottom()],
-                    [points[0][0], plot.bottom()],
-                ],
-                color::BEST.alpha(0.08),
-            );
+            // The area under the mean is filled column by column: light where it
+            // meets the curve, nothing where it meets the floor.
+            if let Some((fill, stops)) = area_fill(
+                points[0][0],
+                points[0][1],
+                points[1][0],
+                points[1][1],
+                plot.bottom(),
+                color::ACCENT,
+            ) {
+                painter.gradient_polygon(&fill, &stops);
+            }
             painter.stroke(points[0], points[1], 1.6, color::BEST);
         }
     }
@@ -352,7 +409,12 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         Align::Right,
         waves(history[newest_index].mean_wave),
     );
-    painter.circle([x_at(newest_index) - 1.0, newest_y], 2.0, color::BEST, 10);
+    painter.circle([x_at(newest_index) - 1.0, newest_y], 2.0, color::ACCENT, 10);
+    painter.luminous_glow(
+        [x_at(newest_index) - 1.0, newest_y],
+        5.0,
+        color::ACCENT.alpha(0.5),
+    );
 
     // The legend, in the corner the newest value does not claim.
     let legend_y = plot.y + 3.0;
@@ -831,7 +893,7 @@ pub fn draw_controls(
     let field = layout.seed_field;
     if field.w > 8.0 && field.h > 8.0 {
         let border = if controls.seed_editing {
-            color::ACCENT
+            color::ACCENT.alpha(0.9)
         } else {
             color::PANEL_BORDER
         };
@@ -870,7 +932,7 @@ pub fn draw_controls(
         }
     }
 
-    // The speed slider: the track it can be grabbed anywhere on, the knob, and
+    // The speed slider: the track it can be grabbed anywhere on, the fader, and
     // what the setting reads as.
     let track = layout.speed_slider;
     if track.w > 8.0 && track.h > 4.0 {
@@ -878,15 +940,32 @@ pub fn draw_controls(
         let bar = Rect::new(track.x, track.center()[1] - bar_h * 0.5, track.w, bar_h);
         painter.rect(bar.x, bar.y, bar.w, bar.h, color::FIELD);
         let t = Controls::slider_from_speed(controls.speed).clamp(0.0, 1.0);
-        if t > 0.0 {
-            painter.rect(bar.x, bar.y, bar.w * t, bar.h, color::ACCENT.alpha(0.45));
+        let thumb_x = bar.x + bar.w * t;
+        // What is set is lit, what is left is not: the fill falls off from the
+        // fader back to the floor of the groove.
+        if let Some((fill, stops)) = gradient_bar(
+            bar.x,
+            thumb_x,
+            bar.y,
+            bar.h,
+            color::ACCENT,
+            FILL_AT_BASE,
+            FILL_AT_THUMB,
+        ) {
+            painter.gradient_polygon(&fill, &stops);
         }
         painter.rect_outline(bar.x, bar.y, bar.w, bar.h, color::PANEL_BORDER.alpha(0.8));
-        painter.circle(
-            [bar.x + bar.w * t, bar.center()[1]],
-            (bar.h * 0.5 + 2.0).max(3.0),
+        painter.rect(
+            thumb_x - THUMB_W * 0.5,
+            bar.center()[1] - THUMB_H * 0.5,
+            THUMB_W,
+            THUMB_H,
             color::ACCENT,
-            16,
+        );
+        painter.luminous_glow(
+            [thumb_x, bar.center()[1]],
+            THUMB_GLOW,
+            color::ACCENT.alpha(0.3),
         );
         let unbounded = Controls::is_unbounded(controls.speed);
         painter.text_aligned(
@@ -947,16 +1026,28 @@ pub fn draw_status(painter: &mut Painter, rect: Rect, status: &str, is_error: bo
 
 /// A centred banner over the Arena: Episode transitions, and anything that went
 /// wrong badly enough to say so in the middle of the screen.
+///
+/// The shell fades the banner by handing its line over at a partial alpha; that
+/// alpha is the fade, so every mark drawn here — plate, rules, glow, the rules'
+/// gradient stops — is scaled by it and the banner arrives and leaves as one
+/// object rather than a box that pops and text that dissolves.
 pub fn draw_banner(painter: &mut Painter, arena: Rect, lines: &[(String, Rgba)]) {
     let max_w = (arena.w - 2.0 * layout::MARGIN).max(0.0);
     let max_h = (arena.h - 2.0 * layout::MARGIN).max(0.0);
     if lines.is_empty() || max_w < 40.0 || max_h < 24.0 {
         return;
     }
+    let fade = lines[0].1.a.clamp(0.0, 1.0);
+    if fade <= 0.0 {
+        return;
+    }
+    // The head line is the announcement; the lines under it are the detail, and
+    // stay in the monospace face the numbers live in.
+    let head_size = font::BODY + 2.0;
     let mut text_w = 0.0_f32;
     let mut box_h = PANEL_PAD * 2.0;
     for (index, (text, _)) in lines.iter().enumerate() {
-        let size = if index == 0 { font::BODY } else { font::SMALL };
+        let size = if index == 0 { head_size } else { font::SMALL };
         text_w = text_w.max(advance(text.chars().count(), size));
         box_h += size + if index == 0 { 6.0 } else { 3.0 };
     }
@@ -964,33 +1055,69 @@ pub fn draw_banner(painter: &mut Painter, arena: Rect, lines: &[(String, Rgba)])
     let height = box_h.min(max_h);
     let x = arena.x + (arena.w - width) * 0.5;
     let y = arena.y + 63.0;
+    // A dim plate the Arena still reads through, and a whisper of light behind
+    // the words so they sit in the air rather than on a box.
     painter.panel(
         x,
         y,
         width,
         height,
-        color::PANEL_BG.alpha(0.82),
-        Some(color::PANEL_BORDER.alpha(0.7)),
+        faded(color::PANEL_BG.alpha(0.62), fade),
+        None,
     );
+    painter.luminous_glow(
+        [x + width * 0.5, y + height * 0.5],
+        (text_w * 0.5).max(1.0),
+        faded(color::TEXT.alpha(0.05), fade),
+    );
+    // The block is framed by light instead of by a border: a rule above and a
+    // rule below, brightest at the centre and gone before either end.
+    let rule_ink = faded(lines[0].1, 0.5);
+    let rule_half = arena.w * 0.3;
+    let center_x = arena.x + arena.w * 0.5;
+    for rule_y in [y - 5.0, y + height + 4.0] {
+        fading_rule_centered(
+            painter,
+            center_x - rule_half,
+            center_x + rule_half,
+            rule_y,
+            rule_ink,
+        );
+    }
     let mut text_y = y + PANEL_PAD;
     for (index, (text, colour)) in lines.iter().enumerate() {
-        let size = if index == 0 { font::BODY } else { font::SMALL };
+        let size = if index == 0 { head_size } else { font::SMALL };
         if text_y + size > y + height {
             break;
         }
-        painter.text_aligned(
-            [x + width * 0.5, text_y],
-            size,
-            *colour,
-            Align::Center,
-            text.clone(),
-        );
+        // The head line's own alpha is the fade; anything under it rides the
+        // same curve.
+        let colour = if index == 0 {
+            *colour
+        } else {
+            faded(*colour, fade)
+        };
+        if index == 0 {
+            // The Display face, centred by the renderer rather than estimated:
+            // the shape of a proportional string is the shaper's to know.
+            display_centered(painter, x + width * 0.5, text_y, size, colour, text);
+        } else {
+            painter.text_aligned(
+                [x + width * 0.5, text_y],
+                size,
+                colour,
+                Align::Center,
+                text.clone(),
+            );
+        }
         text_y += size + if index == 0 { 6.0 } else { 3.0 };
     }
 }
 
 /// The panel body: `PANEL_BG` inside a `PANEL_BORDER` outline, with a
-/// `PANEL_TITLE` heading. Returns the body's inner rect, below the heading.
+/// `PANEL_TITLE` heading and the chrome every panel wears — a section tick, a
+/// heading rule that fades out to the right, and corner brackets. Returns the
+/// body's inner rect, below the heading.
 fn frame(painter: &mut Painter, rect: Rect, title: &str) -> Rect {
     painter.panel(
         rect.x,
@@ -1007,21 +1134,144 @@ fn frame(painter: &mut Painter, rect: Rect, title: &str) -> Rect {
         rect.h.min(24.0),
         color::ACCENT.alpha(0.6),
     );
+    // Brackets, set in from the border: the corner of an instrument's face, and
+    // the only chrome that says so without a heading beside it.
+    let near = [rect.x + BRACKET_INSET, rect.y + BRACKET_INSET];
+    let far = [rect.right() - BRACKET_INSET, rect.bottom() - BRACKET_INSET];
+    // A panel too small to hold the arms shortens them rather than crossing them.
+    let arm = BRACKET_ARM
+        .min(((far[0] - near[0]) * 0.5).max(0.0))
+        .min(((far[1] - near[1]) * 0.5).max(0.0));
+    if arm > 0.0 {
+        let bracket = color::ACCENT.alpha(0.45);
+        painter.stroke(near, [near[0] + arm, near[1]], BRACKET_WEIGHT, bracket);
+        painter.stroke(near, [near[0], near[1] + arm], BRACKET_WEIGHT, bracket);
+        painter.stroke(far, [far[0] - arm, far[1]], BRACKET_WEIGHT, bracket);
+        painter.stroke(far, [far[0], far[1] - arm], BRACKET_WEIGHT, bracket);
+    }
     let inner = rect.inset(PANEL_PAD);
     if inner.w <= 0.0 || inner.h <= 0.0 {
         return inner;
     }
     let mut top = inner.y;
     if inner.h >= TITLE_H + TITLE_GAP {
+        let title_y = top + (TITLE_H - font::HEADING) * 0.5;
+        painter.rect(
+            inner.x,
+            title_y + (font::HEADING - TICK_H) * 0.5,
+            TICK_W,
+            TICK_H,
+            color::ACCENT,
+        );
         painter.text(
-            [inner.x, top + (TITLE_H - font::HEADING) * 0.5],
+            [inner.x + TITLE_INSET, title_y],
             font::HEADING,
             color::PANEL_TITLE,
             title,
         );
-        top += TITLE_H + TITLE_GAP;
+        // The rule starts the gap under the heading and fades across it: the
+        // heading is what the eye lands on, and the rule is where it lands from.
+        top += TITLE_H;
+        fading_rule(
+            painter,
+            inner.x,
+            inner.right(),
+            top,
+            color::PANEL_BORDER,
+            RULE_ALPHA,
+            0.0,
+        );
+        top += TITLE_GAP;
     }
     Rect::new(inner.x, top, inner.w, (inner.bottom() - top).max(0.0))
+}
+
+/// A four-corner quad running `x0..x1` at `y`, with the ink's alpha set per
+/// side: the shape a fading rule or a lit groove is made of. `None` when there
+/// is no area to fill, so callers never emit a degenerate triangle.
+fn gradient_bar(
+    x0: f32,
+    x1: f32,
+    y: f32,
+    thickness: f32,
+    ink: Rgba,
+    left: f32,
+    right: f32,
+) -> Option<([[f32; 2]; 4], [Rgba; 4])> {
+    if x1 <= x0 || thickness <= 0.0 {
+        return None;
+    }
+    let bottom = y + thickness;
+    Some((
+        [[x0, y], [x1, y], [x1, bottom], [x0, bottom]],
+        [
+            ink.alpha(left),
+            ink.alpha(right),
+            ink.alpha(right),
+            ink.alpha(left),
+        ],
+    ))
+}
+
+/// A one-pixel hairline whose alpha runs from `left` to `right` across its
+/// length: a separator that ends by fading rather than by stopping.
+fn fading_rule(painter: &mut Painter, x0: f32, x1: f32, y: f32, ink: Rgba, left: f32, right: f32) {
+    if let Some((points, stops)) = gradient_bar(x0, x1, y, 1.0, ink, left, right) {
+        painter.gradient_polygon(&points, &stops);
+    }
+}
+
+/// A hairline brightest at its middle and gone at both ends: two gradient
+/// quads, so neither end stops on a line. `ink`'s alpha is the peak.
+fn fading_rule_centered(painter: &mut Painter, x0: f32, x1: f32, y: f32, ink: Rgba) {
+    let mid = (x0 + x1) * 0.5;
+    fading_rule(painter, x0, mid, y, ink, 0.0, ink.a);
+    fading_rule(painter, mid, x1, y, ink, ink.a, 0.0);
+}
+
+/// The same colour at `fade` of its opacity. A banner's fade arrives as its
+/// line's alpha, and every mark it is made of has to ride that one number.
+fn faded(color: Rgba, fade: f32) -> Rgba {
+    color.alpha(color.a * fade.clamp(0.0, 1.0))
+}
+
+/// One Chart column's fill: the quad from the curve down to the baseline, and
+/// its two stops — `AREA_TOP` at the curve, `AREA_FLOOR` at the floor. `None`
+/// when the column has no width or the curve is already lying on the floor.
+fn area_fill(
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    baseline: f32,
+    ink: Rgba,
+) -> Option<([[f32; 2]; 4], [Rgba; 4])> {
+    if x1 <= x0 || (y0 >= baseline && y1 >= baseline) {
+        return None;
+    }
+    let curve = ink.alpha(AREA_TOP);
+    let floor = ink.alpha(AREA_FLOOR);
+    Some((
+        [[x0, y0], [x1, y1], [x1, baseline], [x0, baseline]],
+        [curve, curve, floor, floor],
+    ))
+}
+
+/// A centred line in the Display face. `Painter` aligns monospace runs itself,
+/// so the face is flipped on the item it just queued — the same thing
+/// `display_text` does — and a proportional string is never measured by hand.
+fn display_centered(
+    painter: &mut Painter,
+    center_x: f32,
+    y: f32,
+    size: f32,
+    color: Rgba,
+    text: &str,
+) {
+    painter.text_aligned([center_x, y], size, color, Align::Center, text);
+    if let Some(item) = painter.text.last_mut() {
+        item.face = Typeface::Display;
+    }
 }
 
 /// How a button reads: plain, toggled on, or not available.
@@ -1032,8 +1282,8 @@ enum State {
     Dim,
 }
 
-/// One button: a plain rect that lights under the pointer and fills in when it
-/// is toggled on.
+/// One button: a key that lights under the pointer, fills in when it is toggled
+/// on, and says so with an underline as well as a tint.
 fn button(painter: &mut Painter, rect: Rect, label: &str, state: State, hot: bool) {
     if rect.w < 1.0 || rect.h < 1.0 {
         return;
@@ -1046,7 +1296,8 @@ fn button(painter: &mut Painter, rect: Rect, label: &str, state: State, hot: boo
     let text = if hot || state != State::Dim {
         color::TEXT
     } else {
-        color::TEXT_DIM
+        // Not available, but still readable: it says what the strip can do.
+        color::TEXT_DIM.alpha(0.6)
     };
     painter.panel(
         rect.x,
@@ -1056,6 +1307,24 @@ fn button(painter: &mut Painter, rect: Rect, label: &str, state: State, hot: boo
         fill,
         Some(color::PANEL_BORDER.alpha(0.7)),
     );
+    // The key light grazes every key's top edge, so the row reads as hardware
+    // rather than as a row of flat boxes.
+    painter.rect(
+        rect.x + 1.0,
+        rect.y + 1.0,
+        (rect.w - 2.0).max(0.0),
+        1.0,
+        LIT.alpha(0.05),
+    );
+    if state == State::On {
+        painter.rect(
+            rect.x + 3.0,
+            rect.bottom() - 5.0,
+            (rect.w - 6.0).max(0.0),
+            2.0,
+            color::ACCENT,
+        );
+    }
     painter.text_aligned(
         [rect.center()[0], line_y(rect.y, rect.h, font::BODY)],
         font::BODY,
@@ -1138,6 +1407,80 @@ fn wrap(text: &str, width: f32, size: f32, max_lines: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fade_scales_every_mark_by_the_line_s_own_alpha() {
+        let ink = Rgba::rgb(1.0, 1.0, 1.0).alpha(0.5);
+        assert_eq!(faded(ink, 1.0).a, 0.5);
+        assert_eq!(faded(ink, 0.5).a, 0.25);
+        assert_eq!(faded(ink, 0.0).a, 0.0);
+        // A fade is an opacity, not a multiplier a caller can overshoot.
+        assert_eq!(faded(ink, 2.0).a, 0.5);
+        assert_eq!(faded(ink, -1.0).a, 0.0);
+        // Colour is untouched: only the alpha rides the fade.
+        assert_eq!(
+            faded(color::TEXT, 0.5).to_array(),
+            [0.902, 0.914, 0.929, 0.5]
+        );
+    }
+
+    #[test]
+    fn a_gradient_bar_runs_its_stops_across_the_run() {
+        let (points, stops) =
+            gradient_bar(10.0, 30.0, 4.0, 1.0, color::PANEL_BORDER, 0.9, 0.0).unwrap();
+        assert_eq!(
+            points,
+            [[10.0, 4.0], [30.0, 4.0], [30.0, 5.0], [10.0, 5.0]],
+            "the quad runs left to right, then back along the bottom"
+        );
+        assert_eq!(stops.map(|stop| stop.a), [0.9, 0.0, 0.0, 0.9]);
+        // Nothing to fill: no quad at all, rather than a degenerate one.
+        assert!(gradient_bar(10.0, 10.0, 4.0, 1.0, color::PANEL_BORDER, 0.9, 0.0).is_none());
+        assert!(gradient_bar(10.0, 30.0, 4.0, 0.0, color::PANEL_BORDER, 0.9, 0.0).is_none());
+    }
+
+    #[test]
+    fn the_chart_fills_under_the_curve_and_never_below_the_floor() {
+        let (points, stops) = area_fill(0.0, 20.0, 5.0, 10.0, 40.0, color::ACCENT).unwrap();
+        assert_eq!(
+            points,
+            [[0.0, 20.0], [5.0, 10.0], [5.0, 40.0], [0.0, 40.0]],
+            "each column runs from the curve down to the baseline"
+        );
+        assert_eq!([stops[0].a, stops[3].a], [AREA_TOP, AREA_FLOOR]);
+        assert!(stops[0].a > stops[3].a);
+        // A curve lying on the floor has no area under it, and a column with no
+        // width has nothing to fill either.
+        assert!(area_fill(0.0, 40.0, 5.0, 40.0, 40.0, color::ACCENT).is_none());
+        assert!(area_fill(0.0, 41.0, 5.0, 40.0, 40.0, color::ACCENT).is_none());
+        assert!(area_fill(5.0, 20.0, 5.0, 10.0, 40.0, color::ACCENT).is_none());
+    }
+
+    #[test]
+    fn panel_chrome_stays_inside_the_panel_it_decorates() {
+        for rect in [
+            Rect::new(20.0, 30.0, 240.0, 120.0),
+            Rect::new(0.0, 0.0, 40.0, 24.0),
+        ] {
+            let mut painter = Painter::new();
+            let body = frame(&mut painter, rect, "01 / EVOLUTION");
+            assert!(body.x >= rect.x && body.right() <= rect.right());
+            assert!(body.y >= rect.y && body.bottom() <= rect.bottom());
+            for vertex in &painter.triangles {
+                let [x, y] = vertex.pos;
+                // A line is centred on its path, so it may reach half a weight
+                // past an edge — and no further.
+                assert!(
+                    x >= rect.x - 1.0
+                        && x <= rect.right() + 1.0
+                        && y >= rect.y - 1.0
+                        && y <= rect.bottom() + 1.0,
+                    "chrome escapes {rect:?} at {:?}",
+                    vertex.pos
+                );
+            }
+        }
+    }
 
     #[test]
     fn strongest_signals_are_ranked_by_weighted_activation_and_bounded() {

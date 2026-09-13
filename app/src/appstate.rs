@@ -42,6 +42,10 @@ const SIM_BUDGET: f64 = 0.008;
 const RATE_WINDOW: f64 = 1.0;
 /// How long a Generation-complete banner stays up.
 const BANNER_SECONDS: f64 = 1.2;
+/// The banner fades in over its first moments and out over its last; reduced
+/// motion shows it at full strength immediately.
+const BANNER_FADE_IN: f64 = 0.15;
+const BANNER_FADE_OUT: f64 = 0.30;
 /// Where Save writes and Load reads.
 const SAVES_DIR: &str = "saves";
 
@@ -441,6 +445,16 @@ impl App {
         let point = [(position.x as f32) / dpr, (position.y as f32) / dpr];
         let layout = self.layout();
         self.hot = layout.as_ref().and_then(|layout| layout.hit(point));
+        // Controls point at themselves: the cursor says "clickable" only
+        // where a control actually sits.
+        if let Some(window) = self.window.as_ref() {
+            let icon = if self.hot.is_some() {
+                winit::window::CursorIcon::Pointer
+            } else {
+                winit::window::CursorIcon::Default
+            };
+            window.set_cursor(icon);
+        }
         if self.dragging_slider {
             if let Some(layout) = layout {
                 self.set_speed_from_slider(&layout, point);
@@ -616,7 +630,7 @@ impl App {
                 world,
                 self.trails,
             );
-            scene::draw_arena(painter, world, view, self.controls.rays);
+            scene::draw_arena(painter, world, view, self.controls.rays, self.trails);
             self.trail.draw(painter, view);
             self.effects.observe(
                 (self.run.generation(), self.watched_member),
@@ -685,8 +699,17 @@ impl App {
             None => (self.message.clone(), self.message_is_error),
         };
         panels::draw_status(painter, layout.status, &status, is_error);
-        if let Some((text, _)) = self.banner.as_ref() {
-            panels::draw_banner(painter, layout.arena, &[(text.clone(), theme::color::TEXT)]);
+        if let Some((text, remaining)) = self.banner.as_ref() {
+            let shown = BANNER_SECONDS - remaining;
+            let fade = (shown / BANNER_FADE_IN)
+                .min(remaining / BANNER_FADE_OUT)
+                .clamp(0.0, 1.0);
+            let alpha = if self.trails { fade as f32 } else { 1.0 };
+            panels::draw_banner(
+                painter,
+                layout.arena,
+                &[(text.clone(), theme::color::TEXT.alpha(alpha))],
+            );
         }
         physical
     }

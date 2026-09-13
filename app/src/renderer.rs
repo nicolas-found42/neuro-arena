@@ -1,7 +1,9 @@
 //! The renderer: the frame graph the app owns, on top of `wgpu`.
 //!
-//! Ordered, alpha-blended triangles cover shapes and strokes; a textured
-//! pipeline covers glyph quads. Both resolve through a cached 4× MSAA target.
+//! Matter first: ordered, alpha-blended triangles cover shapes and strokes;
+//! then light: a second additive pass lays glows, tracers and flashes over
+//! them; a textured pipeline covers glyph quads. All resolve through a cached
+//! 4× MSAA target.
 //! One uniform carries the viewport the
 //! logical coordinates are measured against.
 //!
@@ -117,14 +119,34 @@ const TEXT_ATTRS: [wgpu::VertexAttribute; 3] = [
     },
 ];
 
+/// Additive blending: light laid over the frame's matter. Straight-alpha
+/// colours contribute `rgb × alpha`, so a light's intensity scales with its
+/// coverage, and overlapping lights accumulate like light does.
+const ADDITIVE: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+    // Light accumulates onto the alpha channel too, so it can never punch a
+    // transparent hole through the opaque frame beneath it.
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
 pub struct Renderer {
     format: wgpu::TextureFormat,
     msaa: Option<(u32, u32, wgpu::TextureView)>,
     viewport_buffer: wgpu::Buffer,
     viewport_bind_group: wgpu::BindGroup,
     triangles: wgpu::RenderPipeline,
+    luminous: wgpu::RenderPipeline,
     glyphs: wgpu::RenderPipeline,
     triangle_buffer: VertexBuffer,
+    luminous_buffer: VertexBuffer,
     glyph_buffer: VertexBuffer,
     text: TextRenderer,
     /// Quads drawn in the last frame, for diagnostics and the status bar.
@@ -215,7 +237,7 @@ impl Renderer {
                         buffers: &[Option<wgpu::VertexBufferLayout>],
                         vs: &str,
                         fs: &str,
-                        blend: bool| {
+                        blend: wgpu::BlendState| {
             gpu.device
                 .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some(label),
@@ -248,11 +270,7 @@ impl Renderer {
                             format,
                             // Straight alpha: the fragment shaders emit
                             // unpremultiplied colour.
-                            blend: if blend {
-                                Some(wgpu::BlendState::ALPHA_BLENDING)
-                            } else {
-                                None
-                            },
+                            blend: Some(blend),
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
                     }),
@@ -267,7 +285,15 @@ impl Renderer {
             &shape_buffers,
             "vs_shape",
             "fs_shape",
-            true,
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+        let luminous = pipeline(
+            "luminous",
+            wgpu::PrimitiveTopology::TriangleList,
+            &shape_buffers,
+            "vs_shape",
+            "fs_shape",
+            ADDITIVE,
         );
         let glyphs = pipeline(
             "glyphs",
@@ -275,7 +301,7 @@ impl Renderer {
             &text_buffers,
             "vs_text",
             "fs_text",
-            true,
+            wgpu::BlendState::ALPHA_BLENDING,
         );
 
         let text = TextRenderer::new(gpu, &glyph_layout);
@@ -285,8 +311,10 @@ impl Renderer {
             viewport_buffer,
             viewport_bind_group,
             triangles,
+            luminous,
             glyphs,
             triangle_buffer: VertexBuffer::default(),
+            luminous_buffer: VertexBuffer::default(),
             glyph_buffer: VertexBuffer::default(),
             text,
             last_glyphs: 0,
@@ -347,6 +375,12 @@ impl Renderer {
             cast_slice(&painter.triangles),
             std::mem::size_of::<TriangleVertex>(),
         );
+        self.luminous_buffer.upload(
+            gpu,
+            "luminous-vertices",
+            cast_slice(&painter.luminous),
+            std::mem::size_of::<TriangleVertex>(),
+        );
         self.glyph_buffer.upload(
             gpu,
             "glyph-vertices",
@@ -386,6 +420,13 @@ impl Renderer {
                 if let Some(slice) = self.triangle_buffer.slice() {
                     pass.set_vertex_buffer(0, slice);
                     pass.draw(0..self.triangle_buffer.vertices, 0..1);
+                }
+            }
+            if self.luminous_buffer.vertices > 0 {
+                pass.set_pipeline(&self.luminous);
+                if let Some(slice) = self.luminous_buffer.slice() {
+                    pass.set_vertex_buffer(0, slice);
+                    pass.draw(0..self.luminous_buffer.vertices, 0..1);
                 }
             }
             if glyph_count > 0 {

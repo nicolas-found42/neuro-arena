@@ -63,8 +63,14 @@ A chevron shows actual velocity; the bracket and hull-clearance label identify t
 nearest Asteroid geometrically. Collision echoes are bounded and suppressed above 16×.
 At small window sizes, the Network becomes a named output snapshot.
 
-See the [native visual audit and verification report](docs/research/native-visual-upgrade.md)
-for matched captures, source research, licenses, and performance evidence.
+The Arena itself is a deep field: Asteroids read as key-lit minerals under a
+layered starfield and nebula wash, and the game's events are light — thruster
+plumes, bullet tracers, impact flashes, Wave pulses along the containment seam,
+and the watched Ship's luminous trail. See the
+[deep-field observatory report](docs/research/deep-field-observatory.md) for
+this pass's captures, research chain, and evidence, and the
+[native visual audit](docs/research/native-visual-upgrade.md) for the flight
+observatory beneath it.
 
 ## Seeds and reproducibility
 

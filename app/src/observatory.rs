@@ -1,6 +1,6 @@
 //! Observatory composition and read-only, bounded presentation history.
 use crate::{
-    painter::{Align, Painter},
+    painter::{Align, Painter, Rgba},
     scene::ArenaView,
     theme::{color, font},
     ui::{Controls, Rect},
@@ -73,7 +73,8 @@ impl Trail {
                 continue;
             }
             let age = (1.0 - (self.time - self.points[i].0) as f32 / 0.8).clamp(0.0, 1.0);
-            p.stroke(a, b, 1.0 + age * 1.8, color::SHIP.alpha(age * 0.24));
+            // Light, not matter: the trace tapers and brightens toward the Ship.
+            crate::effects::light_stroke(p, a, b, 0.5 + age * 0.9, color::SHIP.alpha(age * 0.5));
         }
         p.set_clip(None);
     }
@@ -96,6 +97,19 @@ pub fn arena_view(region: Rect, dpr: f32) -> ArenaView {
     }
 }
 
+/// The wordmark: the size it is set at, where its baseline sits inside that line
+/// box, and the square of accent that shares the baseline.
+const WORDMARK_SIZE: f32 = 34.0;
+const WORDMARK_BASELINE: f32 = 0.985;
+const WORDMARK_MARK: f32 = 4.0;
+const WORDMARK_OFFSET: f32 = 10.0;
+
+/// The state lamp beside the status line, and the lane it keeps clear of the
+/// words. The words are the monospace body face, so the lane is an advance away.
+const STATUS_RADIUS: f32 = 2.5;
+const STATUS_GAP: f32 = 12.0;
+const MONO_ADVANCE: f32 = 0.6;
+
 /// All measurements come from the current World's stored inputs and Network.
 pub fn draw_chrome(
     p: &mut Painter,
@@ -109,32 +123,63 @@ pub fn draw_chrome(
     if region.w < 180.0 {
         return;
     }
-    p.display_text([x, region.y + 6.0], 34.0, color::TEXT, "NEUROARENA");
+    // The mark sits on the wordmark's baseline and the name clears it, so the
+    // two read as one lockup rather than as a bullet in a string.
+    let wordmark = region.y + 6.0;
+    p.rect(
+        x,
+        wordmark + WORDMARK_SIZE * WORDMARK_BASELINE - WORDMARK_MARK,
+        WORDMARK_MARK,
+        WORDMARK_MARK,
+        color::ACCENT,
+    );
+    p.display_text(
+        [x + WORDMARK_OFFSET, wordmark],
+        WORDMARK_SIZE,
+        color::TEXT,
+        "NEUROARENA",
+    );
     p.text(
         [x, region.y + 44.0],
         font::SMALL,
         color::TEXT_DIM,
         "FLIGHT OBSERVATORY   /   EVOLVING INTELLIGENCE",
     );
-    let state = if controls.paused {
-        if controls.watching {
-            "II PAUSED / REPLAY"
-        } else {
-            "II  PAUSED"
-        }
+    // What the run is doing is a lamp as well as a sentence: filled and lit while
+    // it is evolving, hollow while it is not doing anything at all.
+    let (state, ink, evolving) = if controls.paused {
+        (
+            if controls.watching {
+                "PAUSED / REPLAY"
+            } else {
+                "PAUSED"
+            },
+            color::SHIP_FLAME,
+            false,
+        )
     } else if controls.watching {
-        "REPLAY"
+        ("REPLAY", color::ACCENT, false)
     } else {
-        "●  EVOLVING"
+        ("EVOLVING", color::ACCENT, true)
     };
+    let status = region.y + 17.0;
+    let mark = [
+        region.right()
+            - 20.0
+            - state.chars().count() as f32 * font::BODY * MONO_ADVANCE
+            - STATUS_GAP,
+        status + font::BODY * 0.5,
+    ];
+    if evolving {
+        p.circle(mark, STATUS_RADIUS, color::ACCENT, 12);
+        p.luminous_glow(mark, STATUS_RADIUS * 2.0, color::ACCENT.alpha(0.35));
+    } else {
+        status_ring(p, mark, STATUS_RADIUS, color::SHIP_FLAME);
+    }
     p.text_aligned(
-        [region.right() - 20.0, region.y + 17.0],
+        [region.right() - 20.0, status],
         font::BODY,
-        if controls.paused {
-            color::SHIP_FLAME
-        } else {
-            color::ACCENT
-        },
+        ink,
         Align::Right,
         state,
     );
@@ -159,6 +204,21 @@ pub fn draw_chrome(
         156.0,
     );
     crate::instruments::sensorium(p, panel, world, trails);
+}
+
+/// A hollow circle: a closed run of segments, never a filled disc, so "paused"
+/// cannot be misread as "lit".
+fn status_ring(p: &mut Painter, center: [f32; 2], radius: f32, ink: Rgba) {
+    const SEGMENTS: usize = 16;
+    let mut points = [[0.0_f32; 2]; SEGMENTS];
+    for (index, point) in points.iter_mut().enumerate() {
+        let angle = index as f32 * std::f32::consts::TAU / SEGMENTS as f32;
+        *point = [
+            center[0] + radius * angle.cos(),
+            center[1] + radius * angle.sin(),
+        ];
+    }
+    p.polyline(&points, ink, true);
 }
 
 #[cfg(test)]

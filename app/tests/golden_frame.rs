@@ -145,6 +145,7 @@ fn render(world: &World, show_rays: bool) -> Frame {
             scale: 1.0,
         },
         show_rays,
+        show_rays,
     );
     renderer.render(
         &gpu,

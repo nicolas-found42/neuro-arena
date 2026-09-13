@@ -157,6 +157,9 @@ pub struct TextItem {
 #[derive(Default)]
 pub struct Painter {
     pub triangles: Vec<TriangleVertex>,
+    /// Light, not matter: blended additively over the frame's matter after
+    /// `triangles`, so plumes, tracers and flashes accumulate like light.
+    pub luminous: Vec<TriangleVertex>,
     pub text: Vec<TextItem>,
     transform: Transform,
     clip: Option<[f32; 4]>,
@@ -171,6 +174,7 @@ impl Painter {
     /// Start a frame: drop the previous one and reset the transform.
     pub fn clear(&mut self) {
         self.triangles.clear();
+        self.luminous.clear();
         self.text.clear();
         self.transform = Transform::IDENTITY;
         self.clip = None;
@@ -185,7 +189,7 @@ impl Painter {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.triangles.is_empty() && self.text.is_empty()
+        self.triangles.is_empty() && self.luminous.is_empty() && self.text.is_empty()
     }
 
     #[inline]
@@ -195,24 +199,13 @@ impl Painter {
 
     pub fn triangle(&mut self, a: [f32; 2], b: [f32; 2], c: [f32; 2], color: Rgba) {
         let points = [self.point(a), self.point(b), self.point(c)];
-        let color = color.to_linear();
-        if let Some(clip) = self.clip {
-            if points
-                .iter()
-                .any(|p| p[0] < clip[0] || p[1] < clip[1] || p[0] > clip[2] || p[1] > clip[3])
-            {
-                let points = clip_polygon(&points, clip);
-                for i in 1..points.len().saturating_sub(1) {
-                    for pos in [points[0], points[i], points[i + 1]] {
-                        self.triangles.push(TriangleVertex { pos, color });
-                    }
-                }
-                return;
-            }
-        }
-        for pos in points {
-            self.triangles.push(TriangleVertex { pos, color });
-        }
+        emit_triangle(&mut self.triangles, points, color.to_linear(), self.clip);
+    }
+
+    /// The same triangle, blended additively: light laid over the matter.
+    pub fn luminous_triangle(&mut self, a: [f32; 2], b: [f32; 2], c: [f32; 2], color: Rgba) {
+        let points = [self.point(a), self.point(b), self.point(c)];
+        emit_triangle(&mut self.luminous, points, color.to_linear(), self.clip);
     }
 
     /// Clip subsequent geometry to a rectangle in the current logical space.
@@ -241,6 +234,21 @@ impl Painter {
             [x, y + height],
             color,
         );
+    }
+
+    /// A filled polygon whose vertices carry their own colours, interpolated
+    /// across the interior. The fan assumes a convex shape.
+    pub fn gradient_polygon(&mut self, points: &[[f32; 2]], colors: &[Rgba]) {
+        if points.len() < 3 || colors.len() != points.len() {
+            return;
+        }
+        for index in 1..points.len() - 1 {
+            self.gradient_triangle([
+                (points[0], colors[0]),
+                (points[index], colors[index]),
+                (points[index + 1], colors[index + 1]),
+            ]);
+        }
     }
 
     /// A filled convex polygon, fan-triangulated from its first vertex.
@@ -280,6 +288,15 @@ impl Painter {
 
     /// Smooth radial illumination: interpolated vertex alpha, no stacked-disc bands.
     pub fn glow(&mut self, center: [f32; 2], radius: f32, color: Rgba) {
+        self.glow_rings(center, radius, color, false);
+    }
+
+    /// The same soft radial falloff, blended additively: a light source.
+    pub fn luminous_glow(&mut self, center: [f32; 2], radius: f32, color: Rgba) {
+        self.glow_rings(center, radius, color, true);
+    }
+
+    fn glow_rings(&mut self, center: [f32; 2], radius: f32, color: Rgba, luminous: bool) {
         for ring in 0..5 {
             let inner = ring as f32 / 5.0;
             let outer = (ring + 1) as f32 / 5.0;
@@ -295,9 +312,28 @@ impl Painter {
             for i in 0..32 {
                 let a = i as f32 * std::f32::consts::TAU / 32.0;
                 let b = (i + 1) as f32 * std::f32::consts::TAU / 32.0;
-                self.gradient_triangle([vertex(inner, a), vertex(outer, a), vertex(outer, b)]);
-                if ring > 0 {
-                    self.gradient_triangle([vertex(inner, a), vertex(outer, b), vertex(inner, b)]);
+                if luminous {
+                    self.luminous_gradient_triangle([
+                        vertex(inner, a),
+                        vertex(outer, a),
+                        vertex(outer, b),
+                    ]);
+                    if ring > 0 {
+                        self.luminous_gradient_triangle([
+                            vertex(inner, a),
+                            vertex(outer, b),
+                            vertex(inner, b),
+                        ]);
+                    }
+                } else {
+                    self.gradient_triangle([vertex(inner, a), vertex(outer, a), vertex(outer, b)]);
+                    if ring > 0 {
+                        self.gradient_triangle([
+                            vertex(inner, a),
+                            vertex(outer, b),
+                            vertex(inner, b),
+                        ]);
+                    }
                 }
             }
         }
@@ -308,57 +344,16 @@ impl Painter {
             pos: self.point(point),
             color: color.to_linear(),
         });
-        let Some(clip) = self.clip.filter(|r| {
-            vertices
-                .iter()
-                .any(|v| v.pos[0] < r[0] || v.pos[1] < r[1] || v.pos[0] > r[2] || v.pos[1] > r[3])
-        }) else {
-            self.triangles.extend(vertices);
-            return;
-        };
-        let mut polygon = vertices.to_vec();
-        for (axis, boundary, lower) in [
-            (0, clip[0], true),
-            (1, clip[1], true),
-            (0, clip[2], false),
-            (1, clip[3], false),
-        ] {
-            let input = std::mem::take(&mut polygon);
-            let Some(mut previous) = input.last().copied() else {
-                break;
-            };
-            let inside = |v: TriangleVertex| {
-                if lower {
-                    v.pos[axis] >= boundary
-                } else {
-                    v.pos[axis] <= boundary
-                }
-            };
-            for current in input {
-                if inside(current) != inside(previous) {
-                    let t =
-                        (boundary - previous.pos[axis]) / (current.pos[axis] - previous.pos[axis]);
-                    let mut v = TriangleVertex {
-                        pos: std::array::from_fn(|i| {
-                            previous.pos[i] + t * (current.pos[i] - previous.pos[i])
-                        }),
-                        color: std::array::from_fn(|i| {
-                            previous.color[i] + t * (current.color[i] - previous.color[i])
-                        }),
-                    };
-                    v.pos[axis] = boundary;
-                    polygon.push(v);
-                }
-                if inside(current) {
-                    polygon.push(current);
-                }
-                previous = current;
-            }
-        }
-        for i in 1..polygon.len().saturating_sub(1) {
-            self.triangles
-                .extend([polygon[0], polygon[i], polygon[i + 1]]);
-        }
+        emit_gradient(&mut self.triangles, vertices, self.clip);
+    }
+
+    /// A gradient triangle blended additively, for light with soft falloff.
+    fn luminous_gradient_triangle(&mut self, points: [([f32; 2], Rgba); 3]) {
+        let vertices = points.map(|(point, color)| TriangleVertex {
+            pos: self.point(point),
+            color: color.to_linear(),
+        });
+        emit_gradient(&mut self.luminous, vertices, self.clip);
     }
 
     /// Smooth instrument arcs and connections, tessellated at display tolerance.
@@ -463,6 +458,90 @@ impl Painter {
     }
 }
 
+/// Push one clipped, transformed triangle into `target`.
+fn emit_triangle(
+    target: &mut Vec<TriangleVertex>,
+    points: [[f32; 2]; 3],
+    color: [f32; 4],
+    clip: Option<[f32; 4]>,
+) {
+    if let Some(clip) = clip {
+        if points
+            .iter()
+            .any(|p| p[0] < clip[0] || p[1] < clip[1] || p[0] > clip[2] || p[1] > clip[3])
+        {
+            let points = clip_polygon(&points, clip);
+            for i in 1..points.len().saturating_sub(1) {
+                for pos in [points[0], points[i], points[i + 1]] {
+                    target.push(TriangleVertex { pos, color });
+                }
+            }
+            return;
+        }
+    }
+    for pos in points {
+        target.push(TriangleVertex { pos, color });
+    }
+}
+
+/// Clip and fan one gradient triangle into `target`, colours interpolated
+/// across the clipped pieces exactly as they are across the original.
+fn emit_gradient(
+    target: &mut Vec<TriangleVertex>,
+    vertices: [TriangleVertex; 3],
+    clip: Option<[f32; 4]>,
+) {
+    let Some(clip) = clip.filter(|r| {
+        vertices
+            .iter()
+            .any(|v| v.pos[0] < r[0] || v.pos[1] < r[1] || v.pos[0] > r[2] || v.pos[1] > r[3])
+    }) else {
+        target.extend(vertices);
+        return;
+    };
+    let mut polygon = vertices.to_vec();
+    for (axis, boundary, lower) in [
+        (0, clip[0], true),
+        (1, clip[1], true),
+        (0, clip[2], false),
+        (1, clip[3], false),
+    ] {
+        let input = std::mem::take(&mut polygon);
+        let Some(mut previous) = input.last().copied() else {
+            break;
+        };
+        let inside = |v: TriangleVertex| {
+            if lower {
+                v.pos[axis] >= boundary
+            } else {
+                v.pos[axis] <= boundary
+            }
+        };
+        for current in input {
+            if inside(current) != inside(previous) {
+                let t = (boundary - previous.pos[axis]) / (current.pos[axis] - previous.pos[axis]);
+                let mut v = TriangleVertex {
+                    pos: std::array::from_fn(|i| {
+                        previous.pos[i] + t * (current.pos[i] - previous.pos[i])
+                    }),
+                    color: std::array::from_fn(|i| {
+                        previous.color[i] + t * (current.color[i] - previous.color[i])
+                    }),
+                };
+                v.pos[axis] = boundary;
+                polygon.push(v);
+            }
+            if inside(current) {
+                polygon.push(current);
+            }
+            previous = current;
+        }
+    }
+    for i in 1..polygon.len().saturating_sub(1) {
+        target.extend([polygon[0], polygon[i], polygon[i + 1]]);
+    }
+}
+
 /// Sutherland–Hodgman clipping, only used by triangles crossing a clip edge.
 fn clip_polygon(points: &[[f32; 2]], rect: [f32; 4]) -> Vec<[f32; 2]> {
     let mut polygon = points.to_vec();
@@ -542,5 +621,59 @@ mod typography_tests {
             assert_eq!(p.text[1].face, Typeface::Display);
             assert_eq!(p.text[0].size, 12.0 * scale);
         }
+    }
+}
+
+#[cfg(test)]
+mod luminous_tests {
+    use super::*;
+
+    #[test]
+    fn light_is_kept_apart_from_matter() {
+        let mut p = Painter::new();
+        p.set_clip(Some([0.0, 0.0, 100.0, 100.0]));
+        p.triangle(
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            Rgba::rgb(1.0, 1.0, 1.0),
+        );
+        p.luminous_triangle(
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            Rgba::rgb(1.0, 0.5, 0.0),
+        );
+        p.luminous_glow([50.0, 50.0], 10.0, Rgba::rgb(1.0, 0.5, 0.0));
+        assert!(!p.triangles.is_empty());
+        assert!(!p.luminous.is_empty());
+        // Nothing crossed between the buffers: matter stays white, light stays
+        // the authored orange, in linear light.
+        assert!(p.triangles.iter().all(|v| v.color[0] == v.color[1]));
+        assert!(p.luminous.iter().all(|v| v.color[0] > v.color[1]));
+        p.clear();
+        assert!(p.triangles.is_empty() && p.luminous.is_empty());
+    }
+
+    #[test]
+    fn gradient_polygon_interpolates_from_its_corners() {
+        let mut p = Painter::new();
+        let points = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let colors = [
+            Rgba::rgb(1.0, 0.0, 0.0),
+            Rgba::rgb(0.0, 1.0, 0.0),
+            Rgba::rgb(0.0, 0.0, 1.0),
+            Rgba::rgb(1.0, 1.0, 1.0),
+        ];
+        p.gradient_polygon(&points, &colors);
+        // A quad fans into exactly two triangles.
+        assert_eq!(p.triangles.len(), 6);
+        // Corner vertices keep their authored colours (converted to linear).
+        assert_eq!(p.triangles[0].color[0], srgb_to_linear(1.0));
+        assert_eq!(p.triangles[1].color[0], srgb_to_linear(0.0));
+        // A mismatched colour count is refused, not drawn.
+        p.clear();
+        p.gradient_polygon(&points, &colors[..3]);
+        assert!(p.triangles.is_empty());
     }
 }
