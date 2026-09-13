@@ -14,8 +14,18 @@ cargo run --release --bin neuroarena-headless -- --help
 
 What it prints, per Generation: shaped Fitness (best and mean), then the raw
 Competence Gate numbers (best alive time, Wave reached, Asteroids destroyed,
-median alive time), the Species count, the compatibility threshold, and the
-Gate's stagnation counter.
+median alive time), the headline Competence numbers — mean, median and p90
+Waves, and the share of the Population clearing the first Wave — the Species
+count, the compatibility threshold, and the Gate's stagnation counter.
+
+Whole seed sets are compared with the sweep binary, which links the same `sim`
+crate, runs a seed set against a candidate, and prints the paired table
+(ADR 0007):
+
+```sh
+cargo run --release --bin neuroarena-sweep -- --seeds 10 --generations 300 --population 500
+cargo run --release --bin neuroarena-sweep -- --seeds 10 --generations 300 --population 500 --baseline baseline.txt
+```
 
 ## Rules for an entry
 
@@ -175,8 +185,12 @@ byte for byte.
 
 **Recommendation: keep the shipped semantics — alive time stays banked on the
 60-second Wave clock.**
-**Decision: open, pending maintainer review** — this ticket changed nothing;
-the measurement below is what the decision rests on.
+**Decision: kept (2026-09-12).** Alive time stays on the 60-second Wave clock;
+the alternative is not adopted. Its extra Fitness is longer survival rather
+than better skill, it makes a pure dodger bank what clearing used to be worth,
+it stops the Gate's wave and median columns discriminating, and it costs about
+2.2× the wall clock per run. The experiment is retained on the throwaway branch
+`tuning/alive-time-across-waves`, which this entry cites.
 
 The shipped World ends the Episode when `wave_time` reaches
 `WAVE_TIME_LIMIT` (60 s), so survival past 60 s per Wave must be bought by
@@ -253,6 +267,131 @@ not a semantic rewrite. The experiment lives on the throwaway branch
 `tuning/alive-time-across-waves` (one `if` in `World::step`); `main` is
 untouched and the 1-vs-8-worker check still passes byte for byte.
 
+## The headline metric: mean Waves, not the median (2026-09-11, #7)
+
+**Decision: the headline Competence number is the Population's mean Waves at a
+fixed Generation, tie-broken by median alive time, with the median, p90 and the
+share clearing the first Wave reported beside it (ADR 0007).** No constant in
+`sim/src/config.rs` changed. The Gate's window now watches that pair (ADR 0008),
+which is what made the change visible: under the median pair it read
+permanently stagnant — 187/15, 34/15 and 10/15 at Generation 300 across three
+seeds — because both halves were pinned, the median Wave at 0 and the median
+alive time at the 60-second Wave clock. Under the mean, the same run reads
+0/15.
+
+No Gate constant moved with the rule. `MEDIAN_WINDOW` still counts Generations,
+`STAGNATION_LIMIT` still counts a run of stagnant Generations, and
+`STAGNATION_RATIO` still scales median alive time in seconds — now only when
+mean Waves tie, because the headline comparison is itself a fraction of a Wave
+and needs no ratio. If the rule ever needs re-tuning, that is a constant change
+and takes its own entry under the rules above.
+
+The mechanism is bimodality. Most Ships survive the full Wave clock without
+clearing a field; a minority clear Waves and live three times as long. The
+median sits on the camping mode and cannot move until the whole Population
+does, so a headline built on it cannot show progress. The mean resolves the
+moment any member starts clearing.
+
+Baseline, ten seeds at the programme's Population, measured with the sweep
+binary:
+
+```
+$ neuroarena-sweep --seeds 10 --generations 300 --population 500
+# seed       meanWave  medWave  p90Wave  clear%  medAliveT         steps
+     1         0.5060        0        1    42.2       60.0     443426726
+     2         0.4780        0        1    39.8       55.6     432188642
+     3         0.3680        0        1    33.8       60.0     422342951
+     4         0.4060        0        1    34.4       52.8     406261874
+     5         0.4660        0        1    37.8       60.0     418861539
+     6         0.3380        0        1    30.0       52.9     401867503
+     7         0.4720        0        1    40.6       60.0     406292940
+     8         0.5040        0        1    42.8       60.0     419981734
+     9         0.3800        0        1    33.6       60.0     421518801
+    10         0.4640        0        1    39.0       57.6     440367970
+   agg  0.4660/0.5060      0/0      1/1    39.0       60.0    4213110680
+# headline — mean Wave across 10 seeds: 0.4660
+# 4213110680 steps (19505.1 sim-hours) in 892.21s — measured 4722125 steps/s
+```
+
+How to read it:
+
+- **The headline has resolution; the median does not.** Median Waves is 0 in
+  all ten seeds and p90 Waves is 1 in all ten, while the mean spans 0.338 to
+  0.506 and 30–42% of each Population clears the first Wave.
+- **Survival is not the discriminator.** Median alive time is 60.0 s — the Wave
+  clock — in seven of ten seeds: the middle Ship survives the clock and clears
+  nothing, so alive time carries almost no signal at this skill level.
+- **The seed spread is wide** (0.168 between the best and worst seed). That is
+  why the protocol pairs seeds against their own baseline rather than comparing
+  two arms' averages, and why a Candidate has to help most seeds, not the mean
+  of them.
+- **Cost:** 4.21 billion steps in 892 s under load (≈4.7M steps/s). Unloaded,
+  the headless binary measures ≈9.6M steps/s at this Population.
+
+## The opening audits: the proxy is truthful, the memory is not load-bearing (2026-09-11, #8)
+
+**Recommendation: build the sensorium Candidate; do not schedule the memory
+Candidate.** Both audits ran before the first Candidate, as the programme
+requires. The method is entry #5's: a throwaway probe against the public `Run`
+API, deleted when it finished — it forced the memory input by assigning
+`agent.memory` between steps, which needs no change to `sim`.
+
+### A. Is the shaped Fitness a truthful proxy for Waves?
+
+Seeds 1–3, 300 Generations, Population 500; each Generation, Spearman across
+members between `fitness` and `competence.wave`, ties by average rank:
+
+```
+seed   rho(fit,wave) @gen300   median(last 50)   median(all 300)   rho(fit,alive) @gen300
+   1                    0.8720            0.8699              0.8222                    0.9522
+   2                    0.8642            0.8825              0.7998                    0.9623
+   3                    0.8246            0.8349              0.8097                    0.9503
+```
+
+Wave histogram at Generation 300, share of 500 — seed 1: 0:57.8% 1:34.0%
+2:8.0% 3:0.2%; seed 2: 0:60.2% 1:32.4% 2:6.8% 3:0.6%; seed 3: 0:66.2% 1:30.8%
+2:3.0%.
+
+- **The breeding score is not deceptive.** It never runs against Waves, it is
+  ≥ 0.5 in 267 / 253 / 269 of 300 Generations, and the novelty bonus moves the
+  ranking by at most 0.001 — the selection signal and the headline agree.
+- **The instrument is coarse, not wrong.** A Generation holds only 3.2–3.9
+  distinct Wave values and about 60% of the Population sits on Wave 0, so the
+  correlation mostly measures campers against clearers. Its weakest point is
+  Generation 1 (rho 0.077), where 499 members tie and the whole statistic rests
+  on the one that cleared a field.
+- **Alive time is the stronger proxy** (rho ≈ 0.95), which is what a shaped
+  total of 10 points per second against a coarse Wave count predicts.
+
+### B. Does the memory channel do anything?
+
+The seed-2026 champion (Generation 294, 30 nodes / 128 connections) writes a
+full-scale flip-flopping value into the feedback channel — sd 0.79, 79% of
+steps at |memory| ≥ 0.5 — and wires it with real weight (input 20 fans out to
+five enabled connections, max |w| 1.70). Twenty Episodes per condition:
+
+```
+condition               alive med   wave med   wave mean   clear >=1   rocks mean
+(i)  unmodified             65.55        1.0        0.700        60%      3753.50
+(ii) memory forced 0.0      60.95        1.0        0.900        70%      4467.50
+(iii) memory forced 0.5     19.98        0.0        0.150        15%      1548.00
+```
+
+- **Removing the feedback changes nothing measurable.** The paired per-Episode
+  difference is a coin flip — 10 worse, 1 the same, 9 better on alive time —
+  and the +9.31 s mean difference has a 95% interval of [−12.57, +31.19] s
+  against an Episode spread whose IQR is 73 s.
+- **The policy does read the channel.** Forcing it to a constant 0.5, a value
+  the champion never holds by itself, wrecks the pilot: 15 of 20 Episodes
+  worse, mean −38.18 s.
+- Together: the channel is wired, written and read, and the value it carries is
+  **not load-bearing**. The memory Candidate's own falsifier has fired, so it is
+  not scheduled. Recurrence stays available if the sensorium change leaves a
+  temporal gap, but it now starts from a measured null rather than an
+  assumption.
+- Caveat carried forward: this is one champion over twenty Episodes. Enough to
+  refuse a Candidate; not enough to claim memory is useless everywhere.
+
 ## Open questions
 
 These are observations, not decisions. Each needs its own entry before a
@@ -269,8 +408,7 @@ constant moves.
   measurement" above. The alternative's extra Fitness is longer survival, not
   better skill (identical champion destruction rates), and it breaks the
   Gate's wave and median columns while doubling the cost of a run.
-  Recommendation: keep the shipped semantics; decision open for the
-  maintainer.
+  Decided 2026-09-12: keep the shipped semantics.
 - **Nothing here has been re-measured against the browser rendition.** The
   browser's numbers are gone with the old save format and were never meant to be
   reproduced bit for bit (ADR 0005).

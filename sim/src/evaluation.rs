@@ -164,4 +164,12 @@ pub struct GenerationStats {
     pub generation: u32,
     pub best: f64,
     pub mean: f64,
+    /// The Population's mean Waves: the headline Competence number.
+    pub mean_wave: f64,
+    /// The Population's median Waves, reported beside the headline.
+    pub median_wave: u32,
+    /// The Population's 90th-percentile Waves, reported beside the headline.
+    pub p90_wave: u32,
+    /// Share of the Population that has cleared at least the first Wave.
+    pub clearing_share: f64,
 }

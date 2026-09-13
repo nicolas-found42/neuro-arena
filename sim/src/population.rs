@@ -5,6 +5,7 @@
 //! `(run_seed, generation)` — never the Episode streams — so the next
 //! Generation is the same whatever order the Episodes finished in (ADR 0005).
 
+use crate::competence::WaveStats;
 use crate::config::neat;
 use crate::evaluation::GenerationStats;
 use crate::genome::{Genome, InnovationTracker};
@@ -79,7 +80,9 @@ impl Population {
     pub fn new(size: usize, run_seed: u32) -> Self {
         let mut rng = derive_stream(run_seed, 1, 0, Lane::Breeding);
         let mut tracker = InnovationTracker::new();
-        let genomes: Vec<Genome> = (0..size).map(|_| Genome::new(&mut rng, &mut tracker)).collect();
+        let genomes: Vec<Genome> = (0..size)
+            .map(|_| Genome::new(&mut rng, &mut tracker))
+            .collect();
         Self::from_genomes(genomes, run_seed, tracker)
     }
 
@@ -135,8 +138,8 @@ impl Population {
         }
     }
 
-    /// Record a Generation's fitnesses and breed the next one.
-    pub fn evolve(&mut self, fitnesses: &[f64]) {
+    /// Record a Generation's fitnesses and Waves, then breed the next one.
+    pub fn evolve(&mut self, fitnesses: &[f64], waves: WaveStats) {
         let size = fitnesses.len();
         debug_assert_eq!(size, self.genomes.len());
         // Breeding draws from its own stream, derived per Generation (ADR 0005):
@@ -148,6 +151,10 @@ impl Population {
             generation: self.generation,
             best,
             mean,
+            mean_wave: waves.mean,
+            median_wave: waves.median,
+            p90_wave: waves.p90,
+            clearing_share: waves.clearing_share,
         });
 
         // --- Speciate against the representatives carried over from last time.
@@ -173,7 +180,9 @@ impl Population {
                     self.species.len() - 1
                 }
             };
-            self.species[species_index].members.push((index, fitnesses[index]));
+            self.species[species_index]
+                .members
+                .push((index, fitnesses[index]));
             genome_species[index] = species_index;
         }
 
@@ -242,17 +251,13 @@ impl Population {
             let survivors =
                 (species.members.len() as f64 * (1.0 - neat::SURVIVAL_FRACTION)).ceil() as usize;
             species.survivors = species.members[..survivors].to_vec();
-            let mean_fitness = species.members.iter().map(|(_, f)| *f).sum::<f64>()
-                / species.members.len() as f64;
+            let mean_fitness =
+                species.members.iter().map(|(_, f)| *f).sum::<f64>() / species.members.len() as f64;
             species.adjusted = mean_fitness / species.members.len() as f64;
         }
 
         // --- Offspring quota per Species, proportional to adjusted fitness.
-        let weights: Vec<f64> = self
-            .species
-            .iter()
-            .map(|s| s.adjusted.max(0.0))
-            .collect();
+        let weights: Vec<f64> = self.species.iter().map(|s| s.adjusted.max(0.0)).collect();
         let quota = largest_remainder(&weights, size - next.len());
         let mut species = std::mem::take(&mut self.species);
         for (index, species) in species.iter_mut().enumerate() {
@@ -291,13 +296,17 @@ impl Population {
 
     /// Watch mode: record the Generation and advance the counter, breeding
     /// nothing. Every member replays the same Genome.
-    pub fn advance_without_breeding(&mut self, fitnesses: &[f64]) {
+    pub fn advance_without_breeding(&mut self, fitnesses: &[f64], waves: WaveStats) {
         let best = fitnesses.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let mean = fitnesses.iter().sum::<f64>() / fitnesses.len() as f64;
         self.history.push(GenerationStats {
             generation: self.generation,
             best,
             mean,
+            mean_wave: waves.mean,
+            median_wave: waves.median,
+            p90_wave: waves.p90,
+            clearing_share: waves.clearing_share,
         });
         if best > self.best_ever.fitness {
             self.best_ever = BestEver {

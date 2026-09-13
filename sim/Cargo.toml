@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "neuroarena-headless"
 path = "src/bin/headless.rs"
 
+[[bin]]
+name = "neuroarena-sweep"
+path = "src/bin/sweep.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip` is load-bearing, not a nicety: without it a weight can come

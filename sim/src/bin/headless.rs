@@ -15,7 +15,7 @@
 
 use std::time::Instant;
 
-use sim::{Run, RunOptions, default_workers};
+use sim::{default_workers, Run, RunOptions};
 
 struct Args {
     seed: u32,
@@ -36,8 +36,7 @@ fn parse_args() -> Result<Args, String> {
     let mut argv = std::env::args().skip(1);
     while let Some(flag) = argv.next() {
         let mut value = |name: &str| -> Result<String, String> {
-            argv.next()
-                .ok_or_else(|| format!("{name} needs a value"))
+            argv.next().ok_or_else(|| format!("{name} needs a value"))
         };
         match flag.as_str() {
             "--seed" => {
@@ -96,8 +95,9 @@ fn main() {
             args.seed, args.generations, args.population, args.workers
         );
         println!(
-            "# {:>3}  {:>10}  {:>10}  {:>7}  {:>4}  {:>9}  {:>7}  {:>4}  {:>5}  {:>6}",
-            "gen", "best", "mean", "aliveT", "wave", "asteroids", "medAT", "spec", "delta", "gate"
+            "# {:>3}  {:>10}  {:>10}  {:>7}  {:>4}  {:>9}  {:>7}  {:>7}  {:>7}  {:>4}  {:>6}  {:>4}  {:>5}  {:>6}",
+            "gen", "best", "mean", "aliveT", "wave", "asteroids", "medAT", "meanW", "medWave",
+            "p90W", "clear%", "spec", "delta", "gate"
         );
     }
 
@@ -115,7 +115,7 @@ fn main() {
         steps += episode_steps;
         if !args.quiet {
             println!(
-                "  {:>3}  {:>10.1}  {:>10.1}  {:>7.1}  {:>4}  {:>9.0}  {:>7.1}  {:>4}  {:>5.2}  {:>3}/{}",
+                "  {:>3}  {:>10.1}  {:>10.1}  {:>7.1}  {:>4}  {:>9.0}  {:>7.1}  {:>7.3}  {:>7}  {:>4}  {:>6.1}  {:>4}  {:>5.2}  {:>3}/{}",
                 report.generation,
                 report.best,
                 report.mean,
@@ -123,6 +123,10 @@ fn main() {
                 report.gate.best_wave,
                 report.gate.best_asteroids,
                 report.gate.median_alive_time,
+                report.gate.mean_wave,
+                report.gate.median_wave,
+                report.gate.p90_wave,
+                report.gate.clearing_share * 100.0,
                 report.species_count,
                 report.delta_target,
                 report.gate.run_of_stagnant,

@@ -34,15 +34,15 @@ pub mod sensors;
 pub mod world;
 
 pub use asteroid::Asteroid;
-pub use competence::{Competence, CompetenceGate, EpisodeRecord, GateVerdict};
+pub use competence::{Competence, CompetenceGate, EpisodeRecord, GateVerdict, WaveStats};
 pub use config::DT;
 pub use evaluation::{
-    Behavior, EpisodeOutcome, GenerationStats, NoveltyArchive, entropy_bonus, novelty_against,
+    entropy_bonus, novelty_against, Behavior, EpisodeOutcome, GenerationStats, NoveltyArchive,
 };
 pub use genome::{Connection, Genome, InnovationTracker, NodeId, NodeType};
 pub use network::Network;
 pub use population::{Population, Species};
-pub use rng::{Lane, Rng, derive_stream};
-pub use run::{BestRun, Generation, GenerationReport, Run, RunOptions, default_workers};
+pub use rng::{derive_stream, Lane, Rng};
+pub use run::{default_workers, BestRun, Generation, GenerationReport, Run, RunOptions};
 pub use save::{GenomeFile, SaveError};
 pub use world::{Agent, Bullet, Ship, Stats, World};

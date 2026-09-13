@@ -18,11 +18,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use crate::competence::{Competence, CompetenceGate, EpisodeRecord, GateVerdict};
+use crate::competence::{Competence, CompetenceGate, EpisodeRecord, GateVerdict, WaveStats};
 use crate::config::neat;
-use crate::evaluation::{
-    Behavior, EpisodeOutcome, GenerationStats, NoveltyArchive,
-};
+use crate::evaluation::{Behavior, EpisodeOutcome, GenerationStats, NoveltyArchive};
 use crate::genome::Genome;
 use crate::network::Network;
 use crate::population::Population;
@@ -335,7 +333,9 @@ impl Run {
         let ordered: Vec<EpisodeOutcome> = ordered
             .into_iter()
             .enumerate()
-            .map(|(member, outcome)| outcome.unwrap_or_else(|| panic!("member {member} was not evaluated")))
+            .map(|(member, outcome)| {
+                outcome.unwrap_or_else(|| panic!("member {member} was not evaluated"))
+            })
             .collect();
 
         let mut fitnesses = vec![0.0; size];
@@ -376,13 +376,19 @@ impl Run {
         let generation = self.population.generation;
         let verdict = self.gate.observe(&records, generation);
         self.last_verdict = Some(verdict);
+        let waves = WaveStats {
+            mean: verdict.mean_wave,
+            median: verdict.median_wave,
+            p90: verdict.p90_wave,
+            clearing_share: verdict.clearing_share,
+        };
 
         let best = fitnesses.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let mean = fitnesses.iter().sum::<f64>() / size as f64;
         if self.watching {
-            self.population.advance_without_breeding(&fitnesses);
+            self.population.advance_without_breeding(&fitnesses, waves);
         } else {
-            self.population.evolve(&fitnesses);
+            self.population.evolve(&fitnesses, waves);
         }
 
         GenerationReport {

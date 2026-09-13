@@ -246,7 +246,13 @@ fn gate_row(
     };
     let text_y = line_y(y, ROW, font::BODY);
     painter.text([column.x, text_y], font::BODY, color::TEXT_DIM, label);
-    painter.text_aligned([live_right, text_y], font::BODY, color::TEXT, Align::Right, live);
+    painter.text_aligned(
+        [live_right, text_y],
+        font::BODY,
+        color::TEXT,
+        Align::Right,
+        live,
+    );
     painter.text_aligned(
         [column.right, text_y],
         font::BODY,
@@ -256,12 +262,22 @@ fn gate_row(
     );
 }
 
-/// Fitness over Generations: best and mean, growing with the run.
+/// Competence over Generations: the Population's mean Waves, the run's headline
+/// number.
+///
+/// The Chart plots Competence, not the shaped Fitness the Population breeds on
+/// (ADR 0003). Fitness is a breeding score — the shaping in it is the search's,
+/// not the operator's — so it rising says nothing about whether the ships fly
+/// better. Mean Waves is the headline Competence number, the one the Competence
+/// Gate rules on and the one a Candidate has to move, so that is what gets
+/// watched. The median and the p90 tail are reported as numbers in the headless
+/// table instead of drawn here: the mean is a fraction of a Wave while the tail
+/// is a whole number, and the two on one axis shrank the headline to nothing.
 ///
 /// The x axis is the run's own history, never a fixed window, and the y axis
 /// starts at zero so two Generations and five hundred read the same way.
 pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]) {
-    let body = frame(painter, rect, "Fitness");
+    let body = frame(painter, rect, "Competence (mean waves)");
     if body.w < 40.0 || body.h < 20.0 {
         return;
     }
@@ -276,7 +292,11 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
     painter.rect(plot.x, plot.y, plot.w, plot.h, color::FIELD);
     for fraction in [0.25, 0.5, 0.75] {
         let y = plot.bottom() - plot.h * fraction;
-        painter.line([plot.x, y], [plot.right(), y], color::PANEL_BORDER.alpha(0.35));
+        painter.line(
+            [plot.x, y],
+            [plot.right(), y],
+            color::PANEL_BORDER.alpha(0.35),
+        );
     }
     painter.rect_outline(
         plot.x,
@@ -300,9 +320,9 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
     let count = history.len();
     let highest = history
         .iter()
-        .fold(0.0_f64, |top, stats| top.max(stats.best).max(stats.mean));
+        .fold(0.0_f64, |top, stats| top.max(stats.mean_wave));
     // An all-zero history would divide by nothing: keep the axis at 1 and draw
-    // the lines along the floor.
+    // the line along the floor.
     let top = if highest > 0.0 { highest } else { 1.0 };
     let newest_index = count - 1;
     let x_at = |index: usize| -> f32 {
@@ -312,48 +332,41 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
             plot.x + plot.w * (index as f32 / newest_index as f32)
         }
     };
-    let y_at = |value: f64| -> f32 { plot.bottom() - plot.h * (value / top).clamp(0.0, 1.0) as f32 };
+    let y_at =
+        |value: f64| -> f32 { plot.bottom() - plot.h * (value / top).clamp(0.0, 1.0) as f32 };
 
     // A long run has more Generations than the plot has pixels; sample the
     // history at no more than one point per pixel column, newest included.
     let stride = ((count as f32) / plot.w.max(1.0)).ceil().max(1.0) as usize;
     let sampled = count.div_ceil(stride);
-    let mut best_points: Vec<[f32; 2]> = Vec::with_capacity(sampled + 1);
     let mut mean_points: Vec<[f32; 2]> = Vec::with_capacity(sampled + 1);
     let mut index = 0;
     while index < count {
-        let stats = history[index];
-        let x = x_at(index);
-        best_points.push([x, y_at(stats.best)]);
-        mean_points.push([x, y_at(stats.mean)]);
+        mean_points.push([x_at(index), y_at(history[index].mean_wave)]);
         index += stride;
     }
     if newest_index % stride != 0 {
-        let stats = history[newest_index];
-        let x = x_at(newest_index);
-        best_points.push([x, y_at(stats.best)]);
-        mean_points.push([x, y_at(stats.mean)]);
+        mean_points.push([x_at(newest_index), y_at(history[newest_index].mean_wave)]);
     }
 
-    if best_points.len() < 2 {
-        painter.circle(best_points[0], 2.5, color::BEST, 12);
-        painter.circle(mean_points[0], 2.5, color::MEAN, 12);
+    if mean_points.len() < 2 {
+        painter.circle(mean_points[0], 2.5, color::BEST, 12);
     } else {
-        painter.polyline(&best_points, color::BEST, false);
-        painter.polyline(&mean_points, color::MEAN, false);
+        painter.polyline(&mean_points, color::BEST, false);
     }
 
-    // The largest value on the axis, and the newest best at the edge it lands on.
+    // The largest value on the axis, and the newest mean at the edge it lands
+    // on. A mean is a fraction of a Wave, so both keep two decimals.
     if highest > 0.0 {
         painter.text_aligned(
             [plot.x - 4.0, plot.y],
             font::SMALL,
             color::TEXT_DIM,
             Align::Right,
-            number(highest),
+            waves(highest),
         );
     }
-    let newest_y = y_at(history[newest_index].best);
+    let newest_y = y_at(history[newest_index].mean_wave);
     let newest_label_y = if newest_y - plot.y > font::SMALL + 6.0 {
         newest_y - font::SMALL - 5.0
     } else {
@@ -365,7 +378,7 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         font::SMALL,
         color::BEST,
         Align::Right,
-        number(history[newest_index].best),
+        waves(history[newest_index].mean_wave),
     );
     painter.circle([x_at(newest_index) - 1.0, newest_y], 2.0, color::BEST, 10);
 
@@ -376,23 +389,7 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         [plot.x + 18.0, legend_y + 5.0],
         color::BEST,
     );
-    painter.text(
-        [plot.x + 22.0, legend_y],
-        font::SMALL,
-        color::BEST,
-        "best",
-    );
-    painter.line(
-        [plot.x + 52.0, legend_y + 5.0],
-        [plot.x + 64.0, legend_y + 5.0],
-        color::MEAN,
-    );
-    painter.text(
-        [plot.x + 68.0, legend_y],
-        font::SMALL,
-        color::MEAN,
-        "mean",
-    );
+    painter.text([plot.x + 22.0, legend_y], font::SMALL, color::BEST, "mean");
 
     // Generations under the plot: the first, the newest, and what they count.
     let axis_y = plot.bottom() + 3.0;
@@ -557,13 +554,7 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
             [mid, bar.bottom() + 1.0],
             color::PANEL_BORDER.alpha(0.8),
         );
-        painter.rect_outline(
-            bar.x,
-            bar.y,
-            bar.w,
-            bar.h,
-            color::PANEL_BORDER.alpha(0.5),
-        );
+        painter.rect_outline(bar.x, bar.y, bar.w, bar.h, color::PANEL_BORDER.alpha(0.5));
     }
 
     // What each column is, under it.
@@ -649,7 +640,10 @@ impl Columns {
             inputs,
             hidden,
             outputs,
-            input_origin: [inputs.x + 6.0, inputs.y + ((height - input_extent) * 0.5).max(0.0)],
+            input_origin: [
+                inputs.x + 6.0,
+                inputs.y + ((height - input_extent) * 0.5).max(0.0),
+            ],
             input_step,
             hidden_origin: [
                 hidden.center()[0],
@@ -727,7 +721,12 @@ fn node_anchor(id: u32, network: &Network, columns: &Columns) -> Option<[f32; 2]
 
 /// The control strip: the buttons, the seed field, and the speed slider, drawn
 /// exactly where `Layout` says they can be hit.
-pub fn draw_controls(painter: &mut Painter, layout: &Layout, controls: &Controls, hot: Option<Hit>) {
+pub fn draw_controls(
+    painter: &mut Painter,
+    layout: &Layout,
+    controls: &Controls,
+    hot: Option<Hit>,
+) {
     frame(painter, layout.controls, "Controls");
     let pressed = |hit: Hit| hot == Some(hit);
 
@@ -735,7 +734,11 @@ pub fn draw_controls(painter: &mut Painter, layout: &Layout, controls: &Controls
         painter,
         layout.pause,
         if controls.paused { "Resume" } else { "Pause" },
-        if controls.paused { State::On } else { State::Off },
+        if controls.paused {
+            State::On
+        } else {
+            State::Off
+        },
         pressed(Hit::Pause),
     );
     button(
@@ -750,11 +753,27 @@ pub fn draw_controls(painter: &mut Painter, layout: &Layout, controls: &Controls
         painter,
         layout.evolve,
         "Evolve",
-        if controls.watching { State::On } else { State::Dim },
+        if controls.watching {
+            State::On
+        } else {
+            State::Dim
+        },
         pressed(Hit::Evolve),
     );
-    button(painter, layout.restart, "Restart", State::Off, pressed(Hit::Restart));
-    button(painter, layout.new_seed, "New seed", State::Off, pressed(Hit::NewSeed));
+    button(
+        painter,
+        layout.restart,
+        "Restart",
+        State::Off,
+        pressed(Hit::Restart),
+    );
+    button(
+        painter,
+        layout.new_seed,
+        "New seed",
+        State::Off,
+        pressed(Hit::NewSeed),
+    );
     button(painter, layout.save, "Save", State::Off, pressed(Hit::Save));
     button(painter, layout.load, "Load", State::Off, pressed(Hit::Load));
 
@@ -767,7 +786,14 @@ pub fn draw_controls(painter: &mut Painter, layout: &Layout, controls: &Controls
         } else {
             color::PANEL_BORDER
         };
-        painter.panel(field.x, field.y, field.w, field.h, color::FIELD, Some(border));
+        painter.panel(
+            field.x,
+            field.y,
+            field.w,
+            field.h,
+            color::FIELD,
+            Some(border),
+        );
         let text_x = field.x + PANEL_PAD - 2.0;
         let text_y = line_y(field.y, field.h, font::BODY);
         if controls.seed_text.is_empty() {
@@ -800,12 +826,7 @@ pub fn draw_controls(painter: &mut Painter, layout: &Layout, controls: &Controls
     let track = layout.speed_slider;
     if track.w > 8.0 && track.h > 4.0 {
         let bar_h = (track.h * 0.22).clamp(3.0, 5.0);
-        let bar = Rect::new(
-            track.x,
-            track.center()[1] - bar_h * 0.5,
-            track.w,
-            bar_h,
-        );
+        let bar = Rect::new(track.x, track.center()[1] - bar_h * 0.5, track.w, bar_h);
         painter.rect(bar.x, bar.y, bar.w, bar.h, color::FIELD);
         let t = Controls::slider_from_speed(controls.speed).clamp(0.0, 1.0);
         if t > 0.0 {
@@ -820,9 +841,16 @@ pub fn draw_controls(painter: &mut Painter, layout: &Layout, controls: &Controls
         );
         let unbounded = Controls::is_unbounded(controls.speed);
         painter.text_aligned(
-            [layout.controls.right() - PANEL_PAD, line_y(track.y, track.h, font::BODY)],
+            [
+                layout.controls.right() - PANEL_PAD,
+                line_y(track.y, track.h, font::BODY),
+            ],
             font::BODY,
-            if unbounded { color::ACCENT } else { color::TEXT },
+            if unbounded {
+                color::ACCENT
+            } else {
+                color::TEXT
+            },
             Align::Right,
             Controls::speed_label(controls.speed),
         );
@@ -843,9 +871,16 @@ pub fn draw_status(painter: &mut Painter, rect: Rect, status: &str, is_error: bo
     if inner.w <= 0.0 || inner.h < font::SMALL {
         return;
     }
-    let colour = if is_error { color::WARN } else { color::TEXT_DIM };
+    let colour = if is_error {
+        color::WARN
+    } else {
+        color::TEXT_DIM
+    };
     let step = font::SMALL + 2.0;
-    for (index, line) in wrap(status, inner.w, font::SMALL, 2).into_iter().enumerate() {
+    for (index, line) in wrap(status, inner.w, font::SMALL, 2)
+        .into_iter()
+        .enumerate()
+    {
         let y = inner.y + step * index as f32;
         if y + font::SMALL > inner.bottom() {
             break;
@@ -969,7 +1004,13 @@ impl Column {
         };
         let text_y = line_y(y, height, font::BODY);
         painter.text([self.x, text_y], font::BODY, color::TEXT_DIM, label);
-        painter.text_aligned([self.right, text_y], font::BODY, colour, Align::Right, value);
+        painter.text_aligned(
+            [self.right, text_y],
+            font::BODY,
+            colour,
+            Align::Right,
+            value,
+        );
     }
 
     /// The same line one size up: the number a glance should catch.
@@ -1080,6 +1121,15 @@ fn number(value: f64) -> String {
     }
 }
 
+/// A mean Wave count, as the Chart labels it: the headline is a fraction of a
+/// Wave, so two decimals are what show its movement.
+fn waves(value: f64) -> String {
+    if !value.is_finite() {
+        return "—".to_string();
+    }
+    format!("{value:.2}")
+}
+
 /// Greedy wrap against the same estimated advance, for the one strip that has to
 /// carry a sentence rather than a number.
 fn wrap(text: &str, width: f32, size: f32, max_lines: usize) -> Vec<String> {
@@ -1122,9 +1172,17 @@ mod tests {
         let width = advance(30, font::SMALL);
         let lines = wrap("a long status", width, font::SMALL, 1);
         assert_eq!(lines, vec!["a long status".to_string()]);
-        let lines = wrap("aaaa bbbb cccc dddd", advance(9, font::SMALL), font::SMALL, 2);
+        let lines = wrap(
+            "aaaa bbbb cccc dddd",
+            advance(9, font::SMALL),
+            font::SMALL,
+            2,
+        );
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines, vec!["aaaa bbbb".to_string(), "cccc dddd".to_string()]);
+        assert_eq!(
+            lines,
+            vec!["aaaa bbbb".to_string(), "cccc dddd".to_string()]
+        );
     }
 
     #[test]

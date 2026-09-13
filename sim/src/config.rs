@@ -109,7 +109,8 @@ pub mod asteroid {
 
 pub mod sensors {
     /// Index order is input order.
-    pub const RAY_OFFSETS_DEG: [f64; 9] = [0.0, 40.0, -40.0, 80.0, -80.0, 120.0, -120.0, 160.0, -160.0];
+    pub const RAY_OFFSETS_DEG: [f64; 9] =
+        [0.0, 40.0, -40.0, 80.0, -80.0, 120.0, -120.0, 160.0, -160.0];
     pub const RANGE: f64 = 500.0;
     pub const VEL_SCALE: f64 = 300.0;
     /// Proximity-pressure sensor normalization
@@ -193,11 +194,12 @@ pub mod fitness {
     pub const NOVELTY_K: usize = 15;
 }
 
-/// Competence Gate: the window of Generation medians that decides stagnation.
+/// Competence Gate: the window of Generation pairs that decides stagnation.
 pub mod gate {
-    /// Median alive times kept for the stagnation comparison.
+    /// Generation pairs — mean Waves, then median alive time — kept for the
+    /// stagnation comparison.
     pub const MEDIAN_WINDOW: usize = 15;
-    /// Alive-time ratio below which a Generation counts as stagnant.
+    /// Alive-time ratio the tie-break must beat when mean Waves are equal.
     pub const STAGNATION_RATIO: f64 = 1.10;
     /// Consecutive stagnant Generations before the Gate trips.
     pub const STAGNATION_LIMIT: u32 = 15;

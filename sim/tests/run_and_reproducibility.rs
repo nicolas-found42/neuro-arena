@@ -92,10 +92,7 @@ fn an_evaluated_episode_carries_its_competence_and_novelty() {
     let mut run = Run::with_options(5, options(1));
     let generation = run.begin_generation();
     let outcome = generation.evaluate_member(0);
-    assert!(
-        outcome.competence.alive_time >= 0.0,
-        "alive time is banked"
-    );
+    assert!(outcome.competence.alive_time >= 0.0, "alive time is banked");
     assert!(outcome.shaped_fitness.is_finite());
     assert!(outcome.fitness.is_finite());
     assert_eq!(
@@ -157,7 +154,10 @@ fn the_gate_reports_the_best_of_the_generation() {
     assert_eq!(run.gate().best_alive_time, best_alive);
     assert_eq!(report.generation, 1);
     assert!(report.species_count >= 1);
-    assert!(!report.gate.tripped_now, "one Generation cannot trip the Gate");
+    assert!(
+        !report.gate.tripped_now,
+        "one Generation cannot trip the Gate"
+    );
 }
 
 #[test]
@@ -196,12 +196,106 @@ fn the_gate_trips_when_skill_stops_improving() {
 }
 
 #[test]
+fn waves_decide_stagnation_before_alive_time() {
+    let record = |wave: u32, alive_time: f64| EpisodeRecord {
+        member: 0,
+        competence: Competence {
+            alive_time,
+            wave,
+            asteroids: 0.0,
+        },
+    };
+    // A settled baseline: a full window of Wave 1 at 60 s.
+    let settled = || {
+        let mut gate = CompetenceGate::default();
+        for generation in 1..=sim::config::gate::MEDIAN_WINDOW as u32 {
+            gate.observe(&[record(1, 60.0)], generation);
+        }
+        gate
+    };
+
+    assert!(
+        !settled().observe(&[record(2, 20.0)], 16).stagnant,
+        "a higher median Wave is progress even when the Ships die sooner"
+    );
+    assert!(
+        settled().observe(&[record(1, 60.0)], 16).stagnant,
+        "matching the floor on both is not progress"
+    );
+    assert!(
+        settled().observe(&[record(0, 300.0)], 16).stagnant,
+        "alive time is the tie-break, not the headline"
+    );
+    assert!(
+        !settled().observe(&[record(1, 70.0)], 16).stagnant,
+        "at equal Waves, alive time above the ratio is progress"
+    );
+
+    // The removed best-ever escape hatch: one member at a record 500 s alive
+    // while every other member sits on the floor. The old rule — stagnant
+    // unless any member beat an all-time record — let that record set
+    // `improved`; the shipped rule judges only the tie-broken pair, so the
+    // Generation is stagnant: the mean Waves stay exactly 1.0 and the median
+    // alive time exactly 60 s.
+    let mut one_record = vec![record(1, 60.0); 19];
+    one_record.push(record(1, 500.0));
+    assert!(
+        settled().observe(&one_record, 16).stagnant,
+        "a single record-breaking alive time does not excuse a stalled headline"
+    );
+}
+
+#[test]
+fn the_gate_summarizes_the_populations_waves() {
+    let record = |member: usize, wave: u32| EpisodeRecord {
+        member,
+        competence: Competence {
+            alive_time: 1.0,
+            wave,
+            asteroids: 0.0,
+        },
+    };
+    let mut gate = CompetenceGate::default();
+    let verdict = gate.observe(
+        &[
+            record(0, 0),
+            record(1, 0),
+            record(2, 1),
+            record(3, 2),
+            record(4, 5),
+        ],
+        1,
+    );
+    assert_eq!(verdict.median_wave, 1, "the middle of five Waves");
+    assert_eq!(verdict.best_wave, 5);
+    assert_eq!(
+        verdict.p90_wave, 5,
+        "the top of five is the 90th percentile"
+    );
+    assert!(
+        (verdict.mean_wave - 1.6).abs() < 1e-9,
+        "the headline is the mean of the Waves, not the middle one"
+    );
+    assert!(
+        (verdict.clearing_share - 0.6).abs() < 1e-9,
+        "three of five cleared the first Wave"
+    );
+    assert!(
+        !verdict.stagnant,
+        "a Generation with no history behind it is never stagnant"
+    );
+}
+
+#[test]
 fn species_are_never_culled_below_two_or_in_empty_runs() {
     let mut run = Run::with_options(101, RunOptions::new(30, 2));
     for _ in 0..4 {
         run.evaluate_generation();
         let population = run.population();
-        assert!(!population.species.is_empty(), "the Population keeps its Species");
+        assert!(
+            !population.species.is_empty(),
+            "the Population keeps its Species"
+        );
         for species in &population.species {
             assert!(
                 species.stagnation < sim::config::neat::STAGNATION_LIMIT
