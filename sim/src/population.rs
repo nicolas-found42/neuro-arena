@@ -320,11 +320,11 @@ impl Population {
 
     /// One child: crossover or clone, then the structural and weight mutations,
     /// in a fixed order so a seed replays exactly.
-    fn offspring(&mut self, species: &Species, old: &[Genome], mut rng: &mut Rng) -> Genome {
+    fn offspring(&mut self, species: &Species, old: &[Genome], rng: &mut Rng) -> Genome {
         let pick = |rng: &mut Rng| species.survivors[rng.below(species.survivors.len())];
         let mut child = if rng.chance(neat::CROSSOVER_RATE) {
-            let a = pick(&mut rng);
-            let b = pick(&mut rng);
+            let a = pick(rng);
+            let b = pick(rng);
             if a.0 == b.0 {
                 old[a.0].clone()
             } else {
@@ -335,18 +335,18 @@ impl Population {
                 } else {
                     None
                 };
-                Genome::crossover(&old[a.0], &old[b.0], a_fitter, &mut rng)
+                Genome::crossover(&old[a.0], &old[b.0], a_fitter, rng)
             }
         } else {
-            old[pick(&mut rng).0].clone()
+            old[pick(rng).0].clone()
         };
         if rng.chance(neat::ADD_NODE_RATE) {
-            child.mutate_add_node(&mut rng, &mut self.tracker);
+            child.mutate_add_node(rng, &mut self.tracker);
         }
         if rng.chance(neat::ADD_CONNECTION_RATE) {
-            child.mutate_add_connection(&mut rng, &mut self.tracker);
+            child.mutate_add_connection(rng, &mut self.tracker);
         }
-        child.mutate_weights(&mut rng);
+        child.mutate_weights(rng);
         child
     }
 }

@@ -18,10 +18,12 @@
 use std::cell::RefCell;
 use std::sync::LazyLock;
 
-use sim::Asteroid;
 use sim::config::asteroid::Size;
-use sim::config::{arena, asteroid as asteroid_cfg, bullet as bullet_cfg, sensors, ship as ship_cfg};
+use sim::config::{
+    arena, asteroid as asteroid_cfg, bullet as bullet_cfg, sensors, ship as ship_cfg,
+};
 use sim::world::{Bullet, Ship, World};
+use sim::Asteroid;
 
 use crate::painter::{Painter, Rgba, Transform};
 use crate::theme;
@@ -223,14 +225,20 @@ fn draw_asteroids(painter: &mut Painter, asteroids: &[Asteroid]) {
 
             let fill = asteroid_fill(asteroid.size);
             let edge = theme::color::ASTEROID_EDGE;
-            seam_copies(painter, asteroid.x, asteroid.y, asteroid.r, |painter, cx, cy| {
-                let mut points = [[0.0f32; 2]; asteroid_cfg::VERTICES];
-                for (slot, point) in points.iter_mut().zip(relative.iter()).take(count) {
-                    *slot = [point[0] + cx, point[1] + cy];
-                }
-                painter.polygon(&points[..count], fill);
-                painter.polyline(&points[..count], edge, true);
-            });
+            seam_copies(
+                painter,
+                asteroid.x,
+                asteroid.y,
+                asteroid.r,
+                |painter, cx, cy| {
+                    let mut points = [[0.0f32; 2]; asteroid_cfg::VERTICES];
+                    for (slot, point) in points.iter_mut().zip(relative.iter()).take(count) {
+                        *slot = [point[0] + cx, point[1] + cy];
+                    }
+                    painter.polygon(&points[..count], fill);
+                    painter.polyline(&points[..count], edge, true);
+                },
+            );
         }
     });
 }
@@ -289,29 +297,35 @@ fn draw_ship(painter: &mut Painter, ship: &Ship, alive: bool, thrusting: bool) {
         ]
     };
 
-    seam_copies(painter, ship.x, ship.y, ship_cfg::RADIUS, |painter, cx, cy| {
-        if alive && thrusting {
-            let base = SHIP_TAIL * radius;
+    seam_copies(
+        painter,
+        ship.x,
+        ship.y,
+        ship_cfg::RADIUS,
+        |painter, cx, cy| {
+            if alive && thrusting {
+                let base = SHIP_TAIL * radius;
+                painter.triangle(
+                    place(base, -FLAME_HALF * radius, cx, cy),
+                    place(base, FLAME_HALF * radius, cx, cy),
+                    place(base - FLAME_LENGTH * radius, 0.0, cx, cy),
+                    flame_outer,
+                );
+                painter.triangle(
+                    place(base, -FLAME_CORE_HALF * radius, cx, cy),
+                    place(base, FLAME_CORE_HALF * radius, cx, cy),
+                    place(base - FLAME_CORE_LENGTH * radius, 0.0, cx, cy),
+                    flame_core,
+                );
+            }
             painter.triangle(
-                place(base, -FLAME_HALF * radius, cx, cy),
-                place(base, FLAME_HALF * radius, cx, cy),
-                place(base - FLAME_LENGTH * radius, 0.0, cx, cy),
-                flame_outer,
+                place(SHIP_NOSE * radius, 0.0, cx, cy),
+                place(SHIP_TAIL * radius, -SHIP_TAIL_HALF * radius, cx, cy),
+                place(SHIP_TAIL * radius, SHIP_TAIL_HALF * radius, cx, cy),
+                body,
             );
-            painter.triangle(
-                place(base, -FLAME_CORE_HALF * radius, cx, cy),
-                place(base, FLAME_CORE_HALF * radius, cx, cy),
-                place(base - FLAME_CORE_LENGTH * radius, 0.0, cx, cy),
-                flame_core,
-            );
-        }
-        painter.triangle(
-            place(SHIP_NOSE * radius, 0.0, cx, cy),
-            place(SHIP_TAIL * radius, -SHIP_TAIL_HALF * radius, cx, cy),
-            place(SHIP_TAIL * radius, SHIP_TAIL_HALF * radius, cx, cy),
-            body,
-        );
-    });
+        },
+    );
 }
 
 fn draw_bullets(painter: &mut Painter, bullets: &[Bullet]) {

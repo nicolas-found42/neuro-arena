@@ -114,8 +114,8 @@ fn parse_args() -> Result<Args, String> {
     if args.workers == 0 {
         return Err("--workers must be a positive integer".to_string());
     }
-    // `!(x >= 0.0)` also rejects a NaN floor, which would silently never win.
-    if !(args.floor >= 0.0) {
+    // Reject a NaN floor too: it would silently never win.
+    if args.floor.is_nan() || args.floor < 0.0 {
         return Err("--floor must be a non-negative number of Waves".to_string());
     }
     Ok(args)
@@ -453,15 +453,15 @@ fn parse_rows(text: &str) -> Result<Vec<SweepRow>, String> {
                 rest.len() + 1
             ));
         }
-        let clearing_percent: f64 = field(&rest[3], line_number, "clear%")?;
+        let clearing_percent: f64 = field(rest[3], line_number, "clear%")?;
         rows.push(SweepRow {
             seed,
-            mean_wave: field(&rest[0], line_number, "meanWave")?,
-            median_wave: field(&rest[1], line_number, "medWave")?,
-            p90_wave: field(&rest[2], line_number, "p90Wave")?,
+            mean_wave: field(rest[0], line_number, "meanWave")?,
+            median_wave: field(rest[1], line_number, "medWave")?,
+            p90_wave: field(rest[2], line_number, "p90Wave")?,
             clearing_share: clearing_percent / 100.0,
-            median_alive_time: field(&rest[4], line_number, "medAliveT")?,
-            steps: field(&rest[5], line_number, "steps")?,
+            median_alive_time: field(rest[4], line_number, "medAliveT")?,
+            steps: field(rest[5], line_number, "steps")?,
         });
     }
     Ok(rows)

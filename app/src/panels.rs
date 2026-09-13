@@ -345,7 +345,7 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         mean_points.push([x_at(index), y_at(history[index].mean_wave)]);
         index += stride;
     }
-    if newest_index % stride != 0 {
+    if !newest_index.is_multiple_of(stride) {
         mean_points.push([x_at(newest_index), y_at(history[newest_index].mean_wave)]);
     }
 
@@ -473,11 +473,11 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
 
     // Column 2: the hidden nodes the Genome grew, newest draws first.
     let hidden_radius = (columns.hidden_step * 0.32).clamp(2.0, 4.0);
-    let mut rank = 0;
-    for (id, _) in network
+    for (rank, (id, _)) in network
         .nodes()
         .iter()
         .filter(|(_, kind)| *kind == NodeType::Hidden)
+        .enumerate()
     {
         if rank >= columns.shown_hidden {
             break;
@@ -489,7 +489,6 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
             color::NODE_HIDDEN.mix(LIT, lit),
             10,
         );
-        rank += 1;
     }
     if let Some(summary_y) = columns.summary_y {
         painter.text_aligned(

@@ -25,6 +25,8 @@ impl Rgba {
         Self { r, g, b, a: 1.0 }
     }
 
+    // Keep the paired rgb/rgba color constructors explicit at drawing call sites.
+    #[expect(clippy::self_named_constructors)]
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
@@ -58,7 +60,12 @@ impl Rgba {
     /// window shows the colour that was written down, and alpha blending
     /// happens where it belongs, in linear space.
     pub fn to_linear(self) -> [f32; 4] {
-        [srgb_to_linear(self.r), srgb_to_linear(self.g), srgb_to_linear(self.b), self.a]
+        [
+            srgb_to_linear(self.r),
+            srgb_to_linear(self.g),
+            srgb_to_linear(self.b),
+            self.a,
+        ]
     }
 }
 
@@ -281,7 +288,15 @@ impl Painter {
     }
 
     /// A filled, optionally outlined block. The one helper every panel wants.
-    pub fn panel(&mut self, x: f32, y: f32, width: f32, height: f32, fill: Rgba, border: Option<Rgba>) {
+    pub fn panel(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        fill: Rgba,
+        border: Option<Rgba>,
+    ) {
         self.rect(x, y, width, height, fill);
         if let Some(border) = border {
             self.rect_outline(x, y, width, height, border);

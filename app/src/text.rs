@@ -192,7 +192,9 @@ fn place(
         // Colour bitmaps (emoji) arrive as RGBA already.
         SwashContent::Color | SwashContent::SubpixelMask => image
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
             .collect(),
     };

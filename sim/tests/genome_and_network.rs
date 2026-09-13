@@ -171,7 +171,10 @@ fn adding_a_node_splits_one_connection_into_two() {
         .connections()
         .find(|(_, c)| c.from == hidden && c.to == 21)
         .expect("the new node feeds the old target");
-    assert_eq!(outgoing.1.weight, 2.5, "the old weight moves to the far side");
+    assert_eq!(
+        outgoing.1.weight, 2.5,
+        "the old weight moves to the far side"
+    );
 }
 
 #[test]
@@ -221,7 +224,11 @@ fn mutations_keep_the_graph_acyclic_and_orphan_free() {
 fn innovation_numbers_are_stable_per_pair_and_fresh_per_node() {
     let mut tracker = InnovationTracker::new();
     let first = tracker.innovation(3, 22);
-    assert_eq!(tracker.innovation(3, 22), first, "the same pair reuses its id");
+    assert_eq!(
+        tracker.innovation(3, 22),
+        first,
+        "the same pair reuses its id"
+    );
     assert_ne!(tracker.innovation(4, 22), first);
     let mut fresh = InnovationTracker::new();
     assert_eq!(fresh.new_node_id(), sim::config::nn::FIRST_HIDDEN_NODE_ID);
@@ -333,10 +340,8 @@ fn add_connection_refuses_a_pair_that_already_exists() {
     for _ in 0..200 {
         genome.mutate_add_connection(&mut rng, &mut tracker);
     }
-    let pairs: std::collections::HashSet<(u32, u32)> = genome
-        .connections()
-        .map(|(_, c)| (c.from, c.to))
-        .collect();
+    let pairs: std::collections::HashSet<(u32, u32)> =
+        genome.connections().map(|(_, c)| (c.from, c.to)).collect();
     assert_eq!(
         pairs.len(),
         genome.connection_count(),

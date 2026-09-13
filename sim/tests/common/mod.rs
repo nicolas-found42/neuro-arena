@@ -1,3 +1,6 @@
+// Each integration-test binary uses a different subset of these shared fixtures.
+#![allow(dead_code)]
+
 //! Shared fixtures for the simulation tests. Everything here builds a scenario
 //! out of the crate's public API only, exactly as the app does.
 

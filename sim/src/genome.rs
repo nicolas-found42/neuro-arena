@@ -200,8 +200,7 @@ impl Genome {
                 );
             }
             if rng.chance(neat::WEIGHT_REPLACE_RATE) {
-                connection.weight =
-                    rng.range(neat::WEIGHT_REPLACE_MIN, neat::WEIGHT_REPLACE_MAX);
+                connection.weight = rng.range(neat::WEIGHT_REPLACE_MIN, neat::WEIGHT_REPLACE_MAX);
             }
         }
     }
@@ -252,11 +251,7 @@ impl Genome {
             if a == b {
                 continue;
             }
-            if self
-                .connections
-                .values()
-                .any(|c| c.from == a && c.to == b)
-            {
+            if self.connections.values().any(|c| c.from == a && c.to == b) {
                 continue;
             }
             if self.has_path(b, a) {
@@ -366,11 +361,8 @@ impl Genome {
                 }
             }
         }
-        let endpoints: Vec<(NodeId, NodeId)> = child
-            .connections
-            .values()
-            .map(|c| (c.from, c.to))
-            .collect();
+        let endpoints: Vec<(NodeId, NodeId)> =
+            child.connections.values().map(|c| (c.from, c.to)).collect();
         for (from, to) in endpoints {
             child.ensure_endpoint(from);
             child.ensure_endpoint(to);
@@ -428,16 +420,13 @@ impl Genome {
                 }
             }
         }
-        let size = a
-            .connections
-            .len()
-            .max(b.connections.len())
-            .max(1) as f64;
+        let size = a.connections.len().max(b.connections.len()).max(1) as f64;
         let weight_bar = if weight_count > 0.0 {
             weight_sum / weight_count
         } else {
             0.0
         };
-        (neat::DISTANCE_C1 * excess + neat::DISTANCE_C2 * disjoint) / size + neat::DISTANCE_C3 * weight_bar
+        (neat::DISTANCE_C1 * excess + neat::DISTANCE_C2 * disjoint) / size
+            + neat::DISTANCE_C3 * weight_bar
     }
 }

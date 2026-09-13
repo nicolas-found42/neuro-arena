@@ -24,7 +24,9 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-use sim::{EpisodeOutcome, Generation, GenomeFile, Run, RunOptions, World, config, default_workers};
+use sim::{
+    config, default_workers, EpisodeOutcome, Generation, GenomeFile, Run, RunOptions, World,
+};
 
 use crate::gpu::Gpu;
 use crate::painter::{Painter, Transform};
@@ -103,8 +105,10 @@ impl App {
     fn new() -> Self {
         let seed = fresh_seed();
         let workers = default_workers();
-        let mut controls = ui::Controls::default();
-        controls.seed_text = seed.to_string();
+        let controls = ui::Controls {
+            seed_text: seed.to_string(),
+            ..ui::Controls::default()
+        };
         Self {
             gpu: None,
             window: None,
@@ -362,11 +366,8 @@ impl App {
             self.outcomes[self.watched_member] =
                 Some(generation.outcome(self.watched_member, &world));
         }
-        let outcomes: Option<Vec<EpisodeOutcome>> = self
-            .outcomes
-            .iter_mut()
-            .map(|slot| slot.take())
-            .collect();
+        let outcomes: Option<Vec<EpisodeOutcome>> =
+            self.outcomes.iter_mut().map(|slot| slot.take()).collect();
         let outcomes = match outcomes {
             Some(outcomes) => outcomes,
             None => {
@@ -491,7 +492,11 @@ impl App {
             }
             Key::Named(NamedKey::Enter) => {
                 self.controls.seed_editing = false;
-                match self.controls.seed_value().or_else(|| self.controls.seed_text.parse().ok()) {
+                match self
+                    .controls
+                    .seed_value()
+                    .or_else(|| self.controls.seed_text.parse().ok())
+                {
                     Some(seed) => self.restart(seed, None),
                     _ => {
                         self.message = "the seed field must hold a non-negative number".to_string();
@@ -578,9 +583,13 @@ impl App {
             wave: world.map(|world| world.wave).unwrap_or(0),
             fitness: world.map(|world| world.agent.fitness).unwrap_or(0.0),
             competence: sim::Competence {
-                alive_time: world.map(|world| world.agent.stats.alive_time).unwrap_or(0.0),
+                alive_time: world
+                    .map(|world| world.agent.stats.alive_time)
+                    .unwrap_or(0.0),
                 wave: world.map(|world| world.wave).unwrap_or(0),
-                asteroids: world.map(|world| world.agent.stats.asteroid_points).unwrap_or(0.0),
+                asteroids: world
+                    .map(|world| world.agent.stats.asteroid_points)
+                    .unwrap_or(0.0),
             },
             gate: self.run.gate(),
             species: self.run.population().species.len(),
@@ -607,11 +616,7 @@ impl App {
         };
         panels::draw_status(painter, layout.status, &status, is_error);
         if let Some((text, _)) = self.banner.as_ref() {
-            panels::draw_banner(
-                painter,
-                layout.arena,
-                &[(text.clone(), theme::color::TEXT)],
-            );
+            panels::draw_banner(painter, layout.arena, &[(text.clone(), theme::color::TEXT)]);
         }
         physical
     }
@@ -684,7 +689,10 @@ fn save_files() -> Vec<PathBuf> {
             entries
                 .filter_map(Result::ok)
                 .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -783,9 +791,11 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let (Some(surface), Some(config), Some(gpu)) =
-                    (self.surface.as_ref(), self.config.as_mut(), self.gpu.as_ref())
-                {
+                if let (Some(surface), Some(config), Some(gpu)) = (
+                    self.surface.as_ref(),
+                    self.config.as_mut(),
+                    self.gpu.as_ref(),
+                ) {
                     config.width = size.width.max(1);
                     config.height = size.height.max(1);
                     surface.configure(&gpu.device, config);
@@ -800,7 +810,9 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::KeyboardInput { event, .. } => self.on_key(&event.logical_key, event.state),
+            WindowEvent::KeyboardInput { event, .. } => {
+                self.on_key(&event.logical_key, event.state)
+            }
             WindowEvent::RedrawRequested => self.tick(),
             _ => {}
         }

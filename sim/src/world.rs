@@ -126,8 +126,10 @@ impl World {
     pub fn new(rng: Rng, network: Option<Network>) -> Self {
         let mut rng = rng;
         let ship = Ship {
-            x: crate::config::arena::WIDTH / 2.0 + rng.range(-ship_cfg::SPAWN_JITTER, ship_cfg::SPAWN_JITTER),
-            y: crate::config::arena::HEIGHT / 2.0 + rng.range(-ship_cfg::SPAWN_JITTER, ship_cfg::SPAWN_JITTER),
+            x: crate::config::arena::WIDTH / 2.0
+                + rng.range(-ship_cfg::SPAWN_JITTER, ship_cfg::SPAWN_JITTER),
+            y: crate::config::arena::HEIGHT / 2.0
+                + rng.range(-ship_cfg::SPAWN_JITTER, ship_cfg::SPAWN_JITTER),
             heading: rng.range(0.0, std::f64::consts::TAU),
             vx: 0.0,
             vy: 0.0,
@@ -188,13 +190,8 @@ impl World {
             // a Network is steering.
             let inputs = sense(&self.agent, &self.asteroids);
             self.agent.inputs = inputs;
-            if self.agent.network.is_some() {
-                let out = self
-                    .agent
-                    .network
-                    .as_mut()
-                    .expect("checked above")
-                    .activate(&inputs);
+            if let Some(network) = &mut self.agent.network {
+                let out = network.activate(&inputs);
                 let left = out[0] > nn::ACTION_THRESHOLD;
                 let right = out[1] > nn::ACTION_THRESHOLD;
                 let turn = i32::from(right) - i32::from(left);

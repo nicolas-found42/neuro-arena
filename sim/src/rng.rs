@@ -124,8 +124,7 @@ const fn mix64(mut z: u64) -> u64 {
 /// Episodes, breeding and the novelty archive. A run therefore yields the same
 /// numbers at any core count, in any scheduling order, on any wall clock.
 pub fn derive_stream(run_seed: u32, generation: u32, member: u32, lane: Lane) -> Rng {
-    let key = (u64::from(run_seed).wrapping_add(1))
-        .wrapping_mul(0x100_0000_01B3)
+    let key = (u64::from(run_seed).wrapping_add(1)).wrapping_mul(0x100_0000_01B3)
         ^ (u64::from(generation).wrapping_add(1)).wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (u64::from(member).wrapping_add(1)).wrapping_mul(0xD6E8_FEB8_6659_FD93)
         ^ LANE_SALT[lane as usize];
@@ -153,7 +152,10 @@ mod tests {
 
     #[test]
     fn zero_seed_is_remapped() {
-        assert_eq!(Rng::from_seed(0).state(), Rng::from_seed(0x9E37_79B9).state());
+        assert_eq!(
+            Rng::from_seed(0).state(),
+            Rng::from_seed(0x9E37_79B9).state()
+        );
     }
 
     #[test]

@@ -117,8 +117,10 @@ impl Frame {
 
     fn differing_pixels(&self, other: &Frame) -> usize {
         self.pixels
-            .chunks_exact(4)
-            .zip(other.pixels.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(other.pixels.as_chunks::<4>().0.iter())
             .filter(|(a, b)| a != b)
             .count()
     }
@@ -170,24 +172,23 @@ fn write_golden(cells: &[[u8; 3]]) {
     for cell in cells {
         text.push_str(&format!("{:02x}{:02x}{:02x}\n", cell[0], cell[1], cell[2]));
     }
-    std::fs::create_dir_all(golden_path().parent().expect("the golden path has a parent"))
-        .expect("the golden directory is creatable");
+    std::fs::create_dir_all(
+        golden_path()
+            .parent()
+            .expect("the golden path has a parent"),
+    )
+    .expect("the golden directory is creatable");
     std::fs::write(golden_path(), text).expect("the golden file is writable");
 }
 
 fn read_golden() -> Vec<[u8; 3]> {
-    let text = std::fs::read_to_string(golden_path()).expect(
-        "the golden image is missing; regenerate it with NEUROARENA_WRITE_GOLDEN=1",
-    );
+    let text = std::fs::read_to_string(golden_path())
+        .expect("the golden image is missing; regenerate it with NEUROARENA_WRITE_GOLDEN=1");
     text.lines()
         .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
         .map(|line| {
             let bytes = u32::from_str_radix(line.trim(), 16).expect("a hex colour");
-            [
-                (bytes >> 16) as u8,
-                (bytes >> 8) as u8,
-                bytes as u8,
-            ]
+            [(bytes >> 16) as u8, (bytes >> 8) as u8, bytes as u8]
         })
         .collect()
 }
@@ -201,7 +202,11 @@ fn the_arena_frame_matches_its_golden_image() {
         return;
     }
     let golden = read_golden();
-    assert_eq!(golden.len(), COLORS as usize, "the golden image is complete");
+    assert_eq!(
+        golden.len(),
+        COLORS as usize,
+        "the golden image is complete"
+    );
     let mut worst = 0i32;
     let mut worst_cell = 0usize;
     for (index, (cell, expected)) in cells.iter().zip(golden.iter()).enumerate() {

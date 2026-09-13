@@ -7,6 +7,17 @@
     "prettier": "^3.9.6"
   },
   "scripts": {
-    "prepare": "husky"
+    "prepare": "husky",
+    "fmt": "cargo fmt --all",
+    "fmt:check": "cargo fmt --all -- --check",
+    "typecheck": "cargo typecheck",
+    "lint": "cargo lint",
+    "test": "cargo test-all",
+    "test:fast": "cargo test-fast && cargo test-docs",
+    "docs:check": "RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --locked",
+    "deps:check": "cargo deny --locked check && cargo machete --with-metadata",
+    "coverage": "cargo coverage",
+    "check": "npm run fmt:check && npm run lint && npm run test && npm run docs:check",
+    "tools:install": "cargo install --locked cargo-nextest cargo-deny cargo-machete cargo-llvm-cov"
   }
 }

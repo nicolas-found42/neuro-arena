@@ -33,19 +33,22 @@ cargo test                     # the simulation, the headless binary, the render
 
 macOS only, no `.app` bundle, no signing: a release binary and a window.
 
+For formatting, linting, tests, coverage, dependency checks, and Git hooks, see
+[Rust development tooling](docs/development.md).
+
 ## Controls
 
-| Control | Effect |
-|---|---|
-| Pause / Resume (`space`) | freeze the run and study what the current Ship is doing |
-| Speed slider | 1× real time up to ∞ "as fast as the machine allows"; the achieved rate is measured and shown |
-| Rays (`r`) | overlay the Ship's 9 Sensor Rays |
-| Restart | replay the pinned seed from Generation 1, or the watched Genome |
-| New seed | roll a fresh seed and start a new lineage |
-| Save (`s`) | write the best Genome of this run to `saves/seed<N>-g<M>.json` |
-| Load (`l`) | load the next save and replay it — breeding switched off |
-| Evolve (`e`) | stop watching and evolve again, starting from the loaded Genome |
-| Seed field | click it, type a number, press Enter to run that seed |
+| Control                  | Effect                                                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| Pause / Resume (`space`) | freeze the run and study what the current Ship is doing                                       |
+| Speed slider             | 1× real time up to ∞ "as fast as the machine allows"; the achieved rate is measured and shown |
+| Rays (`r`)               | overlay the Ship's 9 Sensor Rays                                                              |
+| Restart                  | replay the pinned seed from Generation 1, or the watched Genome                               |
+| New seed                 | roll a fresh seed and start a new lineage                                                     |
+| Save (`s`)               | write the best Genome of this run to `saves/seed<N>-g<M>.json`                                |
+| Load (`l`)               | load the next save and replay it — breeding switched off                                      |
+| Evolve (`e`)             | stop watching and evolve again, starting from the loaded Genome                               |
+| Seed field               | click it, type a number, press Enter to run that seed                                         |
 
 The Arena keeps its 960×600 logical shape at any window size, so a seed means
 the same thing in a small window and a full-screen one (ADR 0006). Windows can

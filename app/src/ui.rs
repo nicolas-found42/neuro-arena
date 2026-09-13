@@ -380,7 +380,7 @@ fn grouped(value: u32) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);
@@ -548,7 +548,10 @@ mod tests {
     #[test]
     fn a_short_window_shrinks_the_network_first_then_the_chart() {
         let middling = Layout::new(1200.0, 620.0);
-        assert!(middling.network.h < NATURAL[2], "the Network gives way first");
+        assert!(
+            middling.network.h < NATURAL[2],
+            "the Network gives way first"
+        );
         assert_eq!(middling.chart.h, NATURAL[1], "the Chart holds its height");
         assert_eq!(middling.hud.h, NATURAL[0], "the HUD holds its height");
 

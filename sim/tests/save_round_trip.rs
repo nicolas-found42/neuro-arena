@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use common::wired_genome;
 use sim::config::nn;
-use sim::save::{FORMAT, GenomeFile, SaveError, VERSION};
+use sim::save::{GenomeFile, SaveError, FORMAT, VERSION};
 use sim::{Competence, Network, Run, RunOptions};
 
 fn scratch(name: &str) -> PathBuf {
@@ -101,7 +101,10 @@ fn a_genome_saved_from_a_run_can_be_watched_again() {
     let reloaded = GenomeFile::load(&path).unwrap();
     assert_eq!(reloaded.seed, 606);
     assert_eq!(reloaded.genome, file.genome);
-    assert_eq!(file.file_name(), format!("seed606-g{}.json", file.generation));
+    assert_eq!(
+        file.file_name(),
+        format!("seed606-g{}.json", file.generation)
+    );
 
     let mut watched = Run::watch(999, &reloaded.genome, RunOptions::new(3, 1));
     watched.evaluate_generation();
@@ -147,8 +150,7 @@ fn an_unknown_version_is_refused_with_the_version_it_found() {
 fn a_well_formed_file_with_a_broken_graph_is_refused() {
     let mut file = sample_file();
     file.genome = wired_genome(11, 21, 1.0);
-    let mut text: serde_json::Value =
-        serde_json::from_str(&file.to_json()).expect("valid JSON");
+    let mut text: serde_json::Value = serde_json::from_str(&file.to_json()).expect("valid JSON");
     // A connection to a node that does not exist.
     text["connections"] = serde_json::json!([[1, 11, 77, 0.5, true]]);
     let path = scratch("orphan.json");

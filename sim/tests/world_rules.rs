@@ -6,9 +6,9 @@
 
 mod common;
 
-use common::{moving_asteroid, quiet_world, asteroid, wired_genome};
+use common::{asteroid, moving_asteroid, quiet_world, wired_genome};
 use sim::config::asteroid::{Size, SPEED_CAP};
-use sim::config::{DT, nn, ship as ship_cfg, world as world_cfg};
+use sim::config::{nn, ship as ship_cfg, world as world_cfg, DT};
 use sim::genome::NodeType;
 use sim::{Network, World};
 
@@ -28,7 +28,10 @@ fn a_ship_that_flies_into_an_asteroid_dies() {
         world.step_fixed();
         steps += 1;
     }
-    assert!(!world.agent.alive, "the Ship crossed the seam into an asteroid");
+    assert!(
+        !world.agent.alive,
+        "the Ship crossed the seam into an asteroid"
+    );
     assert!(
         (15..60).contains(&steps),
         "the Ship flew into the asteroid rather than spawning on it: {steps} steps"
@@ -66,7 +69,12 @@ fn clearing_the_field_spawns_the_next_wave_with_grown_count() {
     // Every Wave asteroid spawns clear of the Ship.
     for asteroid in &world.asteroids {
         assert!(
-            sim::math::tdist(asteroid.x, asteroid.y, world.agent.ship.x, world.agent.ship.y) >= 150.0,
+            sim::math::tdist(
+                asteroid.x,
+                asteroid.y,
+                world.agent.ship.x,
+                world.agent.ship.y
+            ) >= 150.0,
             "Wave asteroids keep their distance from the Ship"
         );
     }
@@ -86,7 +94,10 @@ fn clearing_a_wave_resets_the_wave_clock() {
     assert!(world.wave_time > 9.0, "ten seconds of Wave clock");
     world.asteroids.clear();
     world.step_fixed();
-    assert!(world.wave_time < DT * 2.0, "the clock restarts with the Wave");
+    assert!(
+        world.wave_time < DT * 2.0,
+        "the clock restarts with the Wave"
+    );
 }
 
 #[test]
@@ -212,7 +223,8 @@ fn the_action_threshold_is_strictly_above_one_half() {
         world.asteroids.push(asteroid(Size::Small, 100.0, 100.0));
         world.step_fixed();
         assert_eq!(
-            world.agent.thrusting, expected,
+            world.agent.thrusting,
+            expected,
             "weight {weight} gives tanh {:.6}",
             weight.tanh()
         );
@@ -223,7 +235,11 @@ fn the_action_threshold_is_strictly_above_one_half() {
 fn turning_moves_the_heading_at_the_rotate_speed() {
     let mut world = World::new(
         sim::Rng::from_seed(10),
-        Some(Network::from_genome(&wired_genome(11, nn::OUTPUT_IDS[1], 5.0))),
+        Some(Network::from_genome(&wired_genome(
+            11,
+            nn::OUTPUT_IDS[1],
+            5.0,
+        ))),
     );
     world.asteroids.clear();
     world.asteroids.push(asteroid(Size::Small, 100.0, 100.0));
@@ -240,7 +256,11 @@ fn turning_moves_the_heading_at_the_rotate_speed() {
 fn a_ship_never_holds_more_than_four_bullets() {
     let mut world = World::new(
         sim::Rng::from_seed(11),
-        Some(Network::from_genome(&wired_genome(11, nn::OUTPUT_IDS[3], 5.0))),
+        Some(Network::from_genome(&wired_genome(
+            11,
+            nn::OUTPUT_IDS[3],
+            5.0,
+        ))),
     );
     // A still Ship with an empty firing line: no bullet is consumed early.
     world.agent.ship.x = 100.0;
@@ -280,7 +300,11 @@ fn a_ship_never_holds_more_than_four_bullets() {
 fn the_firing_cooldown_spaces_shots_out() {
     let mut world = World::new(
         sim::Rng::from_seed(11),
-        Some(Network::from_genome(&wired_genome(11, nn::OUTPUT_IDS[3], 5.0))),
+        Some(Network::from_genome(&wired_genome(
+            11,
+            nn::OUTPUT_IDS[3],
+            5.0,
+        ))),
     );
     world.agent.ship.x = 100.0;
     world.agent.ship.y = 300.0;
@@ -322,7 +346,11 @@ fn a_bullet_splits_a_large_asteroid_into_two_mediums() {
         world.step_fixed();
     }
     assert!(world.bullets.is_empty(), "the bullet was consumed");
-    assert_eq!(world.asteroids.len(), 2, "one Large asteroid became two Mediums");
+    assert_eq!(
+        world.asteroids.len(),
+        2,
+        "one Large asteroid became two Mediums"
+    );
     for asteroid in &world.asteroids {
         assert_eq!(asteroid.size, Size::Medium);
         assert_eq!(asteroid.points, Size::Medium.points());
@@ -399,7 +427,10 @@ fn colliding_asteroids_separate_and_exchange_momentum() {
         (before - after).abs() < 1e-6,
         "a perfectly elastic collision conserves momentum: {before} vs {after}"
     );
-    assert!(asteroids[0].vx <= 0.0 && asteroids[1].vx >= 0.0, "they bounce apart");
+    assert!(
+        asteroids[0].vx <= 0.0 && asteroids[1].vx >= 0.0,
+        "they bounce apart"
+    );
 }
 
 #[test]
@@ -417,7 +448,10 @@ fn rays_see_an_asteroid_across_the_seam() {
         inputs[0]
     );
     assert_eq!(inputs[4], 0.0, "rays pointing away see nothing");
-    assert!(world.agent.alive, "the asteroid is 65 px away, not under the nose");
+    assert!(
+        world.agent.alive,
+        "the asteroid is 65 px away, not under the nose"
+    );
 }
 
 #[test]
@@ -434,7 +468,10 @@ fn threat_bearing_is_normalized_and_signed() {
         "an asteroid straight up reads -0.5, got {}",
         inputs[12]
     );
-    assert!(inputs[13] > 0.8, "closeness rises as the asteroid approaches");
+    assert!(
+        inputs[13] > 0.8,
+        "closeness rises as the asteroid approaches"
+    );
     assert_eq!(inputs[18], 1.0, "a Large asteroid is the largest threat");
     assert_eq!(inputs[11], 1.0, "the bias input is always on");
 }
@@ -451,11 +488,9 @@ fn encirclement_pressure_grows_with_a_crowded_field() {
     crowded.agent.ship.x = 480.0;
     crowded.agent.ship.y = 300.0;
     for offset in 0..8 {
-        crowded.asteroids.push(asteroid(
-            Size::Small,
-            380.0 + offset as f64 * 20.0,
-            200.0,
-        ));
+        crowded
+            .asteroids
+            .push(asteroid(Size::Small, 380.0 + offset as f64 * 20.0, 200.0));
     }
     crowded.step_fixed();
     assert!(

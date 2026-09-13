@@ -25,10 +25,7 @@ pub fn note_error(message: impl Into<String>) {
 
 /// Take the pending GPU error, if any.
 pub fn take_error() -> Option<String> {
-    LAST_ERROR
-        .lock()
-        .expect("no panic holds this lock")
-        .take()
+    LAST_ERROR.lock().expect("no panic holds this lock").take()
 }
 
 pub struct Gpu {
@@ -102,7 +99,10 @@ impl Gpu {
 
     /// One line naming the device, for the status bar.
     pub fn describe(&self) -> String {
-        format!("{} ({:?}, {:?})", self.info.name, self.info.backend, self.info.device_type)
+        format!(
+            "{} ({:?}, {:?})",
+            self.info.name, self.info.backend, self.info.device_type
+        )
     }
 
     /// A vertex buffer holding `bytes`, or `None` when there is nothing to
@@ -242,11 +242,7 @@ pub struct VertexBuffer {
 
 impl VertexBuffer {
     pub fn upload(&mut self, gpu: &Gpu, label: &str, bytes: &[u8], vertex_size: usize) {
-        self.vertices = if vertex_size == 0 {
-            0
-        } else {
-            (bytes.len() / vertex_size) as u32
-        };
+        self.vertices = bytes.len().checked_div(vertex_size).unwrap_or(0) as u32;
         Gpu::upload_vertices(
             &mut self.buffer,
             &mut self.capacity,

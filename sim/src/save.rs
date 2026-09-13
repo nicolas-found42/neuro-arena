@@ -151,12 +151,11 @@ impl GenomeFile {
     /// name the file the text came from.
     pub fn from_json_str(text: &str, path: impl AsRef<Path>) -> Result<Self, SaveError> {
         let path = path.as_ref();
-        let value: serde_json::Value = serde_json::from_str(text).map_err(|error| {
-            SaveError::NotJson {
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|error| SaveError::NotJson {
                 path: path.to_path_buf(),
                 reason: error.to_string(),
-            }
-        })?;
+            })?;
 
         match value.get("format").and_then(|v| v.as_str()) {
             Some(FORMAT) => {}

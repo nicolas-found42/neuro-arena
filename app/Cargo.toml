@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dev-dependencies]
 
 [dependencies]
-neuroarena-sim = { path = "../sim" }
+neuroarena-sim = { version = "1.0.0", path = "../sim" }
 winit = "0.30"
 wgpu = "25"
 cosmic-text = "0.19"

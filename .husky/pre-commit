@@ -1,1 +1,4 @@
 npx lint-staged
+npm run fmt:check
+npm run lint
+npm run test

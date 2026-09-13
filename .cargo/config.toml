@@ -1,0 +1,7 @@
+[alias]
+lint = "clippy --workspace --all-targets --all-features --locked -- -D warnings"
+typecheck = "check --workspace --all-targets --all-features --locked"
+test-all = "test --workspace --all-features --locked"
+test-fast = "nextest run --workspace --all-features --locked"
+test-docs = "test --doc --workspace --all-features --locked"
+coverage = "llvm-cov --workspace --all-features --locked --html"

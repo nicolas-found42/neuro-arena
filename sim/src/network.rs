@@ -27,7 +27,11 @@ pub struct Network {
 impl Network {
     pub fn from_genome(genome: &Genome) -> Self {
         let nodes: Vec<(NodeId, NodeType)> = genome.nodes().collect();
-        let size = nodes.iter().map(|(id, _)| *id as usize + 1).max().unwrap_or(0);
+        let size = nodes
+            .iter()
+            .map(|(id, _)| *id as usize + 1)
+            .max()
+            .unwrap_or(0);
         let present = {
             let mut present = vec![false; size];
             for (id, _) in &nodes {
@@ -58,8 +62,11 @@ impl Network {
             in_degree[to] += 1;
         }
 
-        let mut queue: std::collections::VecDeque<NodeId> =
-            nodes.iter().filter(|(id, _)| in_degree[*id as usize] == 0).map(|(id, _)| *id).collect();
+        let mut queue: std::collections::VecDeque<NodeId> = nodes
+            .iter()
+            .filter(|(id, _)| in_degree[*id as usize] == 0)
+            .map(|(id, _)| *id)
+            .collect();
         let mut order = Vec::with_capacity(nodes.len());
         let mut ordered = vec![false; size];
         while let Some(id) = queue.pop_front() {

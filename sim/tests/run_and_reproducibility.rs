@@ -181,7 +181,7 @@ fn the_gate_trips_when_skill_stops_improving() {
     }
     assert_eq!(
         tripped_at,
-        Some(sim::config::gate::STAGNATION_LIMIT as u32 + 1),
+        Some(sim::config::gate::STAGNATION_LIMIT + 1),
         "the Gate trips after a run of stagnant Generations"
     );
 
