@@ -1,0 +1,18 @@
+# ADR 0007 — A Richer Controller, Judged on Waves in One Arena
+
+The controller gets a deliberate program of added capability, and it starts with the sensorium: the surveys rank angular resolution, selection signal and exploration above network size, so the minimal founding Genome (26 nodes, 105 connections) stays the default and a designed Body Plan is tested as one Candidate rather than adopted as the founding rule. Weights may also be trained by an evolution-shaped method, and gradient learning is no longer excluded — model-free methods need rollouts, not a differentiable simulator — so a policy-gradient Candidate joins the queue (ADR 0010). The goal is a better pilot in this one Arena, not a general agent.
+
+Competence is judged Wave-led: the headline number is the Population's mean Waves at a fixed Generation, with median alive time as the tie-break, and the median, p90 and the share clearing the first Wave reported beside it. The mean and not the median, because the apparatus measured the median pinned at zero — most Ships survive the 60-second wave clock without clearing a field, so the median sits on that camping mode and a headline that cannot move cannot show progress. Candidates screen on 10 seeds × 300 Generations at Population 500 and finalists confirm on 20 seeds × 1000, compared seed by seed through a sweep binary in the `sim` crate. A Candidate passes the screen with a positive median paired delta in mean Waves and fewer than half the seeds regressed, and wins at confirmation by adding a materiality floor of +0.05 Waves — about five percentage points more of the Population clearing the first Wave. The measured baseline is 0.466 mean Waves with 30–42% clearing, so the floor is deliberately about a tenth of the headline rather than a step change. The Population grows because selection events, not per-Network capacity, are the scarce resource — the Species targets are reviewed with it. The program ends when two consecutive Candidates fail that bar. This protocol is only meaningful because a seed still reproduces a run, so ADR 0005 stands unchanged.
+
+ADR 0003's split is untouched: shaped Fitness breeds, the Competence Gate judges. Every constant that moves takes a recorded headless run in `TUNING.md` beside it, and the Network panel keeps its cap — twelve hidden nodes, then `+N more`. When the controller's shape changes, the save format takes a version bump and refuses files it does not know, following ADR 0004's precedent; that costs nothing today, because no save files exist.
+
+## Considered Options
+
+- **Pure neuroevolution, with no weight training ever** — rejected: it is the single constraint that most limits what a complex Network can be exploited to be, and the question would come back at the first plateau.
+- **Generalization beyond this Arena** — rejected for now: the Competence Gate, the vocabulary and the evidence protocol all assume one playfield with one physics. A transfer claim needs more than one task and a second metric; it is a later program, not this one.
+- **A designed Body Plan as a fixed cage** — rejected: the structural mutations stay enabled, so evolution can still find structure the designer did not think of.
+- **Breaking determinism to buy evaluation speed** — rejected: the paired-seed comparison above cannot exist without it.
+
+## Consequences
+
+Each architecture decision that follows — the sensorium, recurrence, the training loop — takes its own ADR and its own `TUNING.md` entry. Results recorded before this program stay reproducible only from the code that produced them, and the save format refuses their files rather than guessing.

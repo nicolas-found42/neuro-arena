@@ -24,9 +24,15 @@ Neuroevolution playground that evolves neural-network pilots to survive an Aster
 
 **Sensor Ray**: The toroidal vision sensor fixed to the Ship's heading that reports normalized distance to the nearest Asteroid intersection. _Avoid_: raycast, beam, lidar
 
+**Threat Slot**: One of the three nearest Asteroids the Sensorium describes — bearing, closeness, closing rate, lateral rate and size. _Avoid_: entity, target, nearest rock
+
+**Sensorium**: Everything an Agent perceives in one step — Sensor Rays, Threat Slots, velocity, bias and memory. _Avoid_: observation, input vector, state
+
 ### Evolution
 
 **Genome**: Evolvable genotype of nodes and weighted connections with stable innovation numbers. _Avoid_: brain, chromosome, DNA, weights
+
+**Body Plan**: The designed founding topology of a Genome — the nodes and connections a fresh Genome starts from. _Avoid_: seed topology, skeleton, template, blueprint
 
 **Network**: Feedforward phenotype derived from a Genome that maps Sensors to actions. _Avoid_: brain, net graph, model
 
@@ -38,12 +44,18 @@ Neuroevolution playground that evolves neural-network pilots to survive an Aster
 
 **Fitness**: Shaped selection score that determines breeding. _Avoid_: score, points, reward
 
-**Competence Gate**: Raw skill metrics shown in the HUD alongside Fitness to judge real skill. _Avoid_: raw fitness, gate score
+**Competence**: The raw skill an Episode banks — alive time, Wave reached, Asteroids destroyed — held apart from Fitness. _Avoid_: score, raw fitness, gate score
+
+**Competence Gate**: The stagnation verdict over the Generation headline pair of Competence — mean Waves, tie-broken by median alive time — shown beside Fitness in the HUD. _Avoid_: fitness gate, gate score
 
 **Innovation Tracker**: The ordered source of innovation numbers that lets crossover align matching genes. _Avoid_: counter, ID generator, innovator
 
 ### Presentation
 
-**HUD**: Overlay panel showing Generation, member index, time, Wave, and gate state. _Avoid_: stats, info bar
+**HUD**: Overlay panel showing Generation, member index, time, Wave, gate state, and the current Fitness as a number. _Avoid_: stats, info bar
 
-**Chart**: Fitness-over-Generations sparkline. _Avoid_: graph
+**Chart**: Sparkline of the headline Competence per Generation — the Population's mean Waves, tie-broken by alive time. _Avoid_: graph, fitness chart
+
+### Program
+
+**Candidate**: A proposed change to the controller, judged by the paired-seed protocol; the default changes only when a Candidate clears the bar. _Avoid_: experiment, variant, arm

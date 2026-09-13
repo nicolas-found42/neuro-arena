@@ -5,3 +5,5 @@ Fitness that breeds the next Generation is shaped — alive time plus movement, 
 Pure survival or pure score breeds degenerate spinners and campers; sensorimotor-entropy (arXiv:1006.4959, 2608.12534) and behavior-descriptor novelty with decaying exploration (arXiv:1902.03142, 2209.03618) sustain diverse use of all four controls and early exploration without masking real skill. The split lets `verify.mjs` and `EvolutionRunner.gate` judge learning on unshaped metrics while selection still exploits shaping. Rejected pure-survival and score-only fitness for collapsing to local minima observed in tuning probes.
 
 Consequences: `World` banks unshaped stats; `Evaluation` adds entropy in-World and novelty at banking time; `Population.history` and `Chart` plot shaped Fitness while the HUD gate watches raw competence; tuning decisions cite research in `js/config.js`.
+
+**Amended by ADR 0008 (2026-09-11):** the split stands unchanged; the Gate now judges stagnation on the tie-broken headline pair (mean Waves, then median alive time) rather than on alive time alone.
