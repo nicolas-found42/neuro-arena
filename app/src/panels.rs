@@ -14,12 +14,6 @@ use crate::painter::{Align, Painter, Rgba};
 use crate::theme::{color, font, layout};
 use crate::ui::{Controls, Hit, Layout, Rect, PANEL_PAD, TITLE_GAP, TITLE_H};
 
-/// One line of body text.
-const ROW: f32 = font::LINE_STEP;
-
-/// The line the dominant numbers get: bigger than the body, short of a heading.
-const HEADLINE: f32 = 24.0;
-
 /// A character's width in the monospace face the text renderer shapes with.
 const CHAR_ADVANCE: f32 = 0.6;
 
@@ -37,9 +31,6 @@ const HIDDEN_MIN_STEP: f32 = 8.0;
 
 /// Room kept under the hidden dots for the "+N more" summary.
 const HIDDEN_SUMMARY_H: f32 = 12.0;
-
-/// The width of the live number's column in the HUD's gate table.
-const GATE_VALUE_W: f32 = 52.0;
 
 /// The five outputs, in `Network::output_ids` order — left, right, thrust, fire,
 /// memory (`config::nn::OUTPUT_IDS`).
@@ -76,190 +67,160 @@ pub struct HudInfo<'a> {
 /// simulation counts *cleared* Waves, and nobody watching wants to hear that a
 /// ship fighting its first Wave is on Wave 0.
 pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
-    let body = frame(painter, rect, "Run");
-    if body.w < 2.0 || body.h < 2.0 {
+    let body = frame(painter, rect, "01 / EVOLUTION");
+    if body.w < 80.0 || body.h < 40.0 {
         return;
     }
-    let gap = 12.0;
-    let column_w = ((body.w - gap) * 0.5).max(0.0);
-    let mut run = Column::new(Rect::new(body.x, body.y, column_w, body.h));
-    let mut skill = Column::new(Rect::new(body.x + column_w + gap, body.y, column_w, body.h));
-    let live_right = skill.right - GATE_VALUE_W;
-
-    // Left: the run being watched.
-    run.pair(painter, ROW, "Seed", info.seed.to_string(), color::TEXT);
-    run.headline(
-        painter,
-        HEADLINE,
-        "Gen",
-        info.generation.to_string(),
-        color::TEXT,
+    let mid = body.x + body.w * 0.5;
+    painter.text([body.x, body.y], font::SMALL, color::TEXT_DIM, "GENERATION");
+    painter.text(
+        [mid, body.y],
+        font::SMALL,
+        color::TEXT_DIM,
+        "SHAPED FITNESS",
     );
-    if info.watching {
-        run.pair(
-            painter,
-            ROW,
-            "Member",
-            "watching".to_string(),
-            color::ACCENT,
-        );
-    } else {
-        run.pair(
-            painter,
-            ROW,
-            "Member",
-            format!(
-                "{}/{}",
-                (info.member + 1).min(info.population),
-                info.population
-            ),
-            color::TEXT,
-        );
-    }
-    run.pair(
-        painter,
-        ROW,
-        "Species",
-        info.species.to_string(),
+    painter.text(
+        [body.x, body.y + 13.0],
+        28.0,
         color::TEXT,
+        format!("{:03}", info.generation),
     );
-    run.pair(
-        painter,
-        ROW,
-        "Episode",
-        format!("{:.1} s", info.episode_time),
-        color::TEXT,
-    );
-    run.pair(
-        painter,
-        ROW,
-        "Wave",
-        (info.wave + 1).to_string(),
-        color::TEXT,
-    );
-    run.pair(
-        painter,
-        ROW,
-        "Speed",
-        Controls::speed_label(info.speed),
-        color::TEXT,
-    );
-    run.pair(
-        painter,
-        ROW,
-        "Rate",
-        Controls::speed_label(info.measured_rate),
-        color::TEXT,
-    );
-
-    // Right: the score. Shaped Fitness first, then the raw Gate — this ship's
-    // numbers beside the run's banked best.
-    skill.headline(
-        painter,
-        HEADLINE,
-        "Fitness",
-        number(info.fitness),
+    painter.text(
+        [mid, body.y + 13.0],
+        28.0,
         color::BEST,
+        number(info.fitness),
     );
-    if let Some(y) = skill.next(ROW) {
-        let text_y = line_y(y, ROW, font::SMALL);
-        painter.text([skill.x, text_y], font::SMALL, color::PANEL_TITLE, "GATE");
+    let rows = [
+        (
+            "Agent / species",
+            format!(
+                "{:03}/{}  /  {}",
+                info.member + 1,
+                info.population,
+                info.species
+            ),
+        ),
+        (
+            "Episode / wave",
+            format!("{:.1}s  /  {:02}", info.episode_time, info.wave + 1),
+        ),
+        ("Measured rate", Controls::speed_label(info.measured_rate)),
+    ];
+    let mut y = body.y + 48.0;
+    for (label, value) in rows {
+        if y + 13.0 > body.bottom() {
+            return;
+        }
+        painter.text([body.x, y], font::SMALL, color::TEXT_DIM, label);
         painter.text_aligned(
-            [live_right, text_y],
-            font::SMALL,
-            color::TEXT_DIM,
-            Align::Right,
-            "live",
-        );
-        painter.text_aligned(
-            [skill.right, text_y],
-            font::SMALL,
-            color::TEXT_DIM,
-            Align::Right,
-            "best",
-        );
-    }
-    gate_row(
-        painter,
-        &mut skill,
-        "alive",
-        format!("{:.1}", info.competence.alive_time),
-        format!("{:.1}", info.gate.best_alive_time),
-        live_right,
-    );
-    gate_row(
-        painter,
-        &mut skill,
-        "wave",
-        (info.competence.wave + 1).to_string(),
-        (info.gate.best_wave + 1).to_string(),
-        live_right,
-    );
-    gate_row(
-        painter,
-        &mut skill,
-        "asteroids",
-        format!("{:.0}", info.competence.asteroids),
-        format!("{:.0}", info.gate.best_asteroids),
-        live_right,
-    );
-    if let Some(y) = skill.next(ROW) {
-        let text_y = line_y(y, ROW, font::BODY);
-        painter.text([skill.x, text_y], font::BODY, color::TEXT_DIM, "stagnant");
-        painter.text_aligned(
-            [live_right, text_y],
+            [body.right(), y],
             font::BODY,
             color::TEXT,
             Align::Right,
-            format!("{}/{}", info.gate.run_of_stagnant, STAGNATION_LIMIT),
+            value,
         );
+        y += 17.0;
     }
-    if let Some(y) = skill.next(ROW) {
-        let text_y = line_y(y, ROW, font::SMALL);
-        let (verdict, colour) = match info.gate.tripped_generation {
-            Some(generation) => (format!("tripped gen {generation}"), color::WARN),
-            None if info.gate.tripped => ("tripped".to_string(), color::WARN),
-            None => ("clear".to_string(), color::TEXT_DIM),
-        };
-        painter.text([skill.x, text_y], font::SMALL, color::TEXT_DIM, "gate");
-        painter.text_aligned(
-            [skill.right, text_y],
-            font::SMALL,
-            colour,
-            Align::Right,
-            verdict,
-        );
-    }
-}
-
-/// One row of the Gate table: a label, this ship's number, the run's best.
-fn gate_row(
-    painter: &mut Painter,
-    column: &mut Column,
-    label: &str,
-    live: String,
-    best: String,
-    live_right: f32,
-) {
-    let Some(y) = column.next(ROW) else {
+    if y + 18.0 > body.bottom() {
         return;
-    };
-    let text_y = line_y(y, ROW, font::BODY);
-    painter.text([column.x, text_y], font::BODY, color::TEXT_DIM, label);
+    }
+    if y + 63.0 > body.bottom() {
+        painter.text(
+            [body.x, y],
+            font::SMALL,
+            if info.gate.tripped {
+                color::WARN
+            } else {
+                color::OK
+            },
+            format!(
+                "GATE / {}   {} / {}",
+                if info.gate.tripped {
+                    "STAGNANT"
+                } else {
+                    "OBSERVING"
+                },
+                info.gate.run_of_stagnant,
+                STAGNATION_LIMIT
+            ),
+        );
+        return;
+    }
+    painter.line([body.x, y], [body.right(), y], color::PANEL_BORDER);
+    y += 5.0;
+    painter.text([body.x, y], font::SMALL, color::TEXT_DIM, "COMPETENCE");
     painter.text_aligned(
-        [live_right, text_y],
-        font::BODY,
-        color::TEXT,
+        [body.right() - 72.0, y],
+        font::SMALL,
+        color::TEXT_DIM,
         Align::Right,
-        live,
+        "LIVE",
     );
     painter.text_aligned(
-        [column.right, text_y],
-        font::BODY,
-        color::TEXT,
+        [body.right(), y],
+        font::SMALL,
+        color::TEXT_DIM,
         Align::Right,
-        best,
+        "BEST",
     );
+    y += 15.0;
+    for (label, live, best) in [
+        (
+            "Alive seconds",
+            format!("{:.1}", info.competence.alive_time),
+            format!("{:.1}", info.gate.best_alive_time),
+        ),
+        (
+            "Asteroid points",
+            format!("{:.0}", info.competence.asteroids),
+            format!("{:.0}", info.gate.best_asteroids),
+        ),
+    ] {
+        if y + 12.0 > body.bottom() {
+            return;
+        }
+        painter.text([body.x, y], font::SMALL, color::TEXT_DIM, label);
+        painter.text_aligned(
+            [body.right() - 72.0, y],
+            font::SMALL,
+            color::TEXT,
+            Align::Right,
+            live,
+        );
+        painter.text_aligned(
+            [body.right(), y],
+            font::SMALL,
+            color::TEXT,
+            Align::Right,
+            best,
+        );
+        y += 15.0;
+    }
+    if y + 12.0 <= body.bottom() {
+        let state = if info.gate.tripped {
+            "STAGNANT"
+        } else {
+            "OBSERVING"
+        };
+        painter.text(
+            [body.x, y],
+            font::SMALL,
+            if info.gate.tripped {
+                color::WARN
+            } else {
+                color::OK
+            },
+            format!("GATE / {state}"),
+        );
+        painter.text_aligned(
+            [body.right(), y],
+            font::SMALL,
+            color::TEXT_DIM,
+            Align::Right,
+            format!("{} / {}", info.gate.run_of_stagnant, STAGNATION_LIMIT),
+        );
+    }
 }
 
 /// Competence over Generations: the Population's mean Waves, the run's headline
@@ -277,7 +238,7 @@ fn gate_row(
 /// The x axis is the run's own history, never a fixed window, and the y axis
 /// starts at zero so two Generations and five hundred read the same way.
 pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]) {
-    let body = frame(painter, rect, "Competence (mean waves)");
+    let body = frame(painter, rect, "02 / COMPETENCE · MEAN WAVES");
     if body.w < 40.0 || body.h < 20.0 {
         return;
     }
@@ -312,7 +273,7 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
             font::SMALL,
             color::TEXT_DIM,
             Align::Center,
-            "no Generations yet",
+            "Awaiting first Generation",
         );
         return;
     }
@@ -352,7 +313,18 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
     if mean_points.len() < 2 {
         painter.circle(mean_points[0], 2.5, color::BEST, 12);
     } else {
-        painter.polyline(&mean_points, color::BEST, false);
+        for points in mean_points.windows(2) {
+            painter.polygon(
+                &[
+                    points[0],
+                    points[1],
+                    [points[1][0], plot.bottom()],
+                    [points[0][0], plot.bottom()],
+                ],
+                color::BEST.alpha(0.08),
+            );
+            painter.stroke(points[0], points[1], 1.6, color::BEST);
+        }
     }
 
     // The largest value on the axis, and the newest mean at the edge it lands
@@ -422,11 +394,47 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
 /// Every frame redraws from the `Network` the shell hands over, so what is on
 /// screen is the network that is flying, never a stale one.
 pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network: &Network) {
-    let body = frame(painter, rect, "Network");
+    let body = frame(
+        painter,
+        rect,
+        if rect.h < 140.0 {
+            "03 / NETWORK · OUTPUT SNAPSHOT"
+        } else {
+            "03 / NETWORK · STRONGEST SIGNALS"
+        },
+    );
     if body.w < 40.0 || body.h < 24.0 {
         return;
     }
-    let caption_h = (font::SMALL + 3.0).min(body.h * 0.3);
+    if body.h < 100.0 {
+        // At the minimum window size an unlabeled miniature graph is useless.
+        // Keep named outputs and actual activations visible in two columns.
+        let row_h = ((body.h - 13.0) / 3.0).min(22.0);
+        for (i, id) in network.output_ids().iter().enumerate() {
+            let x = body.x + (i % 2) as f32 * body.w * 0.5;
+            let y = body.y + (i / 2) as f32 * row_h;
+            painter.text([x, y], 9.0, color::TEXT_DIM, OUTPUT_NAMES[i]);
+            painter.text_aligned(
+                [x + body.w * 0.5 - 8.0, y],
+                9.0,
+                color::TEXT,
+                Align::Right,
+                format!("{:+.2}", network.activation(*id)),
+            );
+        }
+        painter.text(
+            [body.x, body.bottom() - 11.0],
+            9.0,
+            color::TEXT_DIM,
+            format!(
+                "{} inputs / {} hidden / 5 outputs",
+                nn::INPUTS,
+                genome.hidden_count()
+            ),
+        );
+        return;
+    }
+    let caption_h = (font::SMALL + 18.0).min(body.h * 0.3);
     let columns = Columns::new(body, caption_h, network, genome.hidden_count());
     let input_count = network
         .nodes()
@@ -434,23 +442,33 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
         .filter(|(_, kind)| *kind == NodeType::Input)
         .count();
 
-    // Edges first, so the nodes sit on top of the hairball.
-    for (from, to, weight) in network.enabled_connections() {
+    // Show the two strongest incoming weighted signals per visible target.
+    // This is a magnitude ranking, not confidence or causal attribution.
+    for (from, to, contribution) in strongest_signals(network) {
         let (Some(a), Some(b)) = (
             node_anchor(from, network, &columns),
             node_anchor(to, network, &columns),
         ) else {
             continue;
         };
-        let colour = if weight.abs() < 0.25 {
-            color::NODE_EDGE.alpha(0.25)
+        let activity = contribution.abs().clamp(0.0, 1.0) as f32;
+        let ink = if contribution >= 0.0 {
+            color::ACCENT
         } else {
-            color::NODE_EDGE
+            color::SHIP_FLAME
         };
-        let thickness = 1.0 + 2.0 * (weight.abs() / 4.0).min(1.0) as f32;
-        thick_line(painter, a, b, thickness, colour);
+        painter.path(
+            &crate::vector::connection(a, b, contribution < 0.0),
+            0.65 + activity * 1.15,
+            ink.alpha(0.12 + activity * 0.45),
+        );
     }
 
+    const INPUT_NAMES: [&str; 21] = [
+        "ray 0", "ray +40", "ray -40", "ray +80", "ray -80", "ray +120", "ray -120", "ray +160",
+        "ray -160", "vel x", "vel y", "bias", "bearing", "near", "closing", "bullets", "lateral",
+        "near 2", "size", "pressure", "memory",
+    ];
     // Column 1: the sensor inputs as a stack of dots, firing brighter as they do.
     let input_radius = (columns.input_step * 0.5).clamp(0.0, 2.2);
     for (rank, (id, _)) in network
@@ -463,6 +481,14 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
             break;
         }
         let lit = network.activation(*id).abs().clamp(0.0, 1.0) as f32;
+        if columns.input_step >= 10.0 {
+            painter.text(
+                [columns.inputs.x, columns.input_dot(rank)[1] - 5.0],
+                8.0,
+                color::TEXT_DIM,
+                INPUT_NAMES.get(rank).copied().unwrap_or("input"),
+            );
+        }
         painter.circle(
             columns.input_dot(rank),
             input_radius,
@@ -556,6 +582,14 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
         painter.rect_outline(bar.x, bar.y, bar.w, bar.h, color::PANEL_BORDER.alpha(0.5));
     }
 
+    if caption_h >= 25.0 {
+        painter.text(
+            [body.x, body.bottom() - 11.0],
+            8.0,
+            color::TEXT_DIM,
+            "TOP 2/NODE  + SOLID / - DASHED  |a × w|",
+        );
+    }
     // What each column is, under it.
     let caption_y = body.bottom() - caption_h + 1.0;
     if caption_y + font::SMALL > body.bottom() {
@@ -584,6 +618,22 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
     );
 }
 
+/// Two incoming signals per target, ranked by |activation × weight|.
+/// Stable tie-breaking avoids flicker; work is linear apart from target lookup.
+fn strongest_signals(network: &Network) -> Vec<(u32, u32, f64)> {
+    let mut targets = std::collections::BTreeMap::<u32, Vec<(u32, f64)>>::new();
+    for (from, to, weight) in network.enabled_connections() {
+        let signals = targets.entry(to).or_default();
+        signals.push((from, network.activation(from) * weight));
+        signals.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()).then(a.0.cmp(&b.0)));
+        signals.truncate(2);
+    }
+    targets
+        .into_iter()
+        .flat_map(|(to, values)| values.into_iter().map(move |(from, v)| (from, to, v)))
+        .collect()
+}
+
 /// The Network panel's three columns, in window pixels.
 struct Columns {
     inputs: Rect,
@@ -603,7 +653,7 @@ struct Columns {
 impl Columns {
     fn new(body: Rect, caption_h: f32, network: &Network, hidden_count: usize) -> Columns {
         let height = (body.h - caption_h).max(0.0);
-        let input_w = (body.w * 0.08).min(24.0);
+        let input_w = (body.w * 0.20).min(64.0);
         let output_w = (body.w * 0.36).clamp(60.0, 118.0).min(body.w);
         let hidden_w = (body.w - input_w - output_w - COLUMN_GAP * 2.0).max(0.0);
         let inputs = Rect::new(body.x, body.y, input_w, height);
@@ -613,7 +663,7 @@ impl Columns {
         // 21 dots at no more than 4 px pitch, and never taller than the column:
         // a squeezed panel packs them tighter rather than spilling into the
         // caption lane below.
-        let input_step = (height / nn::INPUTS as f32).clamp(0.0, 4.0);
+        let input_step = (height / nn::INPUTS as f32).clamp(0.0, 11.0);
         let input_extent = input_step * (nn::INPUTS - 1) as f32;
         let shown_hidden = hidden_count
             .min(HIDDEN_MAX_DRAWN)
@@ -640,7 +690,7 @@ impl Columns {
             hidden,
             outputs,
             input_origin: [
-                inputs.x + 6.0,
+                inputs.right() - 4.0,
                 inputs.y + ((height - input_extent) * 0.5).max(0.0),
             ],
             input_step,
@@ -866,6 +916,13 @@ pub fn draw_status(painter: &mut Painter, rect: Rect, status: &str, is_error: bo
         color::PANEL_BG,
         Some(color::PANEL_BORDER),
     );
+    painter.rect(
+        rect.x,
+        rect.y,
+        2.0,
+        rect.h.min(24.0),
+        color::ACCENT.alpha(0.6),
+    );
     let inner = rect.inset(PANEL_PAD);
     if inner.w <= 0.0 || inner.h < font::SMALL {
         return;
@@ -899,14 +956,14 @@ pub fn draw_banner(painter: &mut Painter, arena: Rect, lines: &[(String, Rgba)])
     let mut text_w = 0.0_f32;
     let mut box_h = PANEL_PAD * 2.0;
     for (index, (text, _)) in lines.iter().enumerate() {
-        let size = if index == 0 { font::BIG } else { font::BODY };
+        let size = if index == 0 { font::BODY } else { font::SMALL };
         text_w = text_w.max(advance(text.chars().count(), size));
         box_h += size + if index == 0 { 6.0 } else { 3.0 };
     }
     let width = (text_w + PANEL_PAD * 4.0).min(max_w);
     let height = box_h.min(max_h);
     let x = arena.x + (arena.w - width) * 0.5;
-    let y = arena.y + (arena.h - height) * 0.5;
+    let y = arena.y + 63.0;
     painter.panel(
         x,
         y,
@@ -917,7 +974,7 @@ pub fn draw_banner(painter: &mut Painter, arena: Rect, lines: &[(String, Rgba)])
     );
     let mut text_y = y + PANEL_PAD;
     for (index, (text, colour)) in lines.iter().enumerate() {
-        let size = if index == 0 { font::BIG } else { font::BODY };
+        let size = if index == 0 { font::BODY } else { font::SMALL };
         if text_y + size > y + height {
             break;
         }
@@ -943,6 +1000,13 @@ fn frame(painter: &mut Painter, rect: Rect, title: &str) -> Rect {
         color::PANEL_BG,
         Some(color::PANEL_BORDER),
     );
+    painter.rect(
+        rect.x,
+        rect.y,
+        2.0,
+        rect.h.min(24.0),
+        color::ACCENT.alpha(0.6),
+    );
     let inner = rect.inset(PANEL_PAD);
     if inner.w <= 0.0 || inner.h <= 0.0 {
         return inner;
@@ -958,76 +1022,6 @@ fn frame(painter: &mut Painter, rect: Rect, title: &str) -> Rect {
         top += TITLE_H + TITLE_GAP;
     }
     Rect::new(inner.x, top, inner.w, (inner.bottom() - top).max(0.0))
-}
-
-/// A run of lines down a panel body. Lines that no longer fit are dropped, so a
-/// panel squeezed by a short window never draws outside itself.
-struct Column {
-    x: f32,
-    right: f32,
-    y: f32,
-    limit: f32,
-}
-
-impl Column {
-    fn new(body: Rect) -> Self {
-        Self {
-            x: body.x,
-            right: body.right(),
-            y: body.y,
-            limit: body.bottom(),
-        }
-    }
-
-    /// The next line's top edge, or `None` once the body is full.
-    fn next(&mut self, height: f32) -> Option<f32> {
-        if height <= 0.0 || self.y + height > self.limit {
-            return None;
-        }
-        let y = self.y;
-        self.y += height;
-        Some(y)
-    }
-
-    /// A dim label at the left edge and a value right-aligned at the right.
-    fn pair(
-        &mut self,
-        painter: &mut Painter,
-        height: f32,
-        label: &str,
-        value: String,
-        colour: Rgba,
-    ) {
-        let Some(y) = self.next(height) else {
-            return;
-        };
-        let text_y = line_y(y, height, font::BODY);
-        painter.text([self.x, text_y], font::BODY, color::TEXT_DIM, label);
-        painter.text_aligned(
-            [self.right, text_y],
-            font::BODY,
-            colour,
-            Align::Right,
-            value,
-        );
-    }
-
-    /// The same line one size up: the number a glance should catch.
-    fn headline(
-        &mut self,
-        painter: &mut Painter,
-        height: f32,
-        label: &str,
-        value: String,
-        colour: Rgba,
-    ) {
-        let Some(y) = self.next(height) else {
-            return;
-        };
-        let text_y = line_y(y, height, font::BIG);
-        painter.text([self.x, text_y], font::SMALL, color::TEXT_DIM, label);
-        painter.text_aligned([self.right, text_y], font::BIG, colour, Align::Right, value);
-    }
 }
 
 /// How a button reads: plain, toggled on, or not available.
@@ -1068,27 +1062,6 @@ fn button(painter: &mut Painter, rect: Rect, label: &str, state: State, hot: boo
         text,
         Align::Center,
         label,
-    );
-}
-
-/// A line of a given thickness, as a quad: the Painter's lines carry no width,
-/// and a Network's weights are worth seeing.
-fn thick_line(painter: &mut Painter, a: [f32; 2], b: [f32; 2], thickness: f32, colour: Rgba) {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let length = (dx * dx + dy * dy).sqrt();
-    if length < 0.01 || thickness <= 0.0 {
-        return;
-    }
-    let half = thickness * 0.5;
-    let (nx, ny) = (-dy / length * half, dx / length * half);
-    painter.polygon(
-        &[
-            [a[0] + nx, a[1] + ny],
-            [b[0] + nx, b[1] + ny],
-            [b[0] - nx, b[1] - ny],
-            [a[0] - nx, a[1] - ny],
-        ],
-        colour,
     );
 }
 
@@ -1165,6 +1138,34 @@ fn wrap(text: &str, width: f32, size: f32, max_lines: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strongest_signals_are_ranked_by_weighted_activation_and_bounded() {
+        let mut rng = sim::Rng::from_seed(2);
+        let mut tracker = sim::InnovationTracker::new();
+        let genome = Genome::new(&mut rng, &mut tracker);
+        let mut net = Network::from_genome(&genome);
+        net.activate(&[0.5; nn::INPUTS]);
+        let selected = strongest_signals(&net);
+        assert_eq!(selected.len(), nn::OUTPUTS * 2);
+        for to in net.output_ids() {
+            let mut expected: Vec<_> = net
+                .enabled_connections()
+                .into_iter()
+                .filter(|(_, t, _)| *t == to)
+                .map(|(f, t, w)| (f, t, net.activation(f) * w))
+                .collect();
+            expected.sort_by(|a, b| b.2.abs().total_cmp(&a.2.abs()).then(a.0.cmp(&b.0)));
+            assert_eq!(
+                selected
+                    .iter()
+                    .filter(|(_, t, _)| *t == to)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                expected[..2]
+            );
+        }
+    }
 
     #[test]
     fn wrapping_keeps_the_status_to_the_strip_and_its_two_lines() {

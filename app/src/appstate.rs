@@ -29,9 +29,10 @@ use sim::{
 };
 
 use crate::gpu::Gpu;
+use crate::observatory::{self, Trail};
 use crate::painter::{Painter, Transform};
 use crate::renderer::Renderer;
-use crate::scene::{self, ArenaView};
+use crate::scene;
 use crate::{panels, theme, ui};
 
 /// How long a frame may spend stepping the watched Episode, in seconds. This is
@@ -67,6 +68,9 @@ struct App {
     config: Option<wgpu::SurfaceConfiguration>,
     renderer: Option<Renderer>,
     painter: Painter,
+    trail: Trail,
+    effects: crate::effects::Effects,
+    trails: bool,
 
     seed: u32,
     run: Run,
@@ -81,6 +85,8 @@ struct App {
 
     controls: ui::Controls,
     hot: Option<ui::Hit>,
+    focus: Option<ui::Hit>,
+    pressed: Option<ui::Hit>,
     cursor: Option<PhysicalPosition<f64>>,
     dragging_slider: bool,
     message: String,
@@ -117,6 +123,9 @@ impl App {
             config: None,
             renderer: None,
             painter: Painter::new(),
+            trail: Trail::default(),
+            effects: crate::effects::Effects::default(),
+            trails: true,
             seed,
             run: Run::with_options(seed, RunOptions::new(config::neat::POP_SIZE, workers)),
             workers,
@@ -128,6 +137,8 @@ impl App {
             outcomes: Vec::new(),
             controls,
             hot: None,
+            focus: None,
+            pressed: None,
             cursor: None,
             dragging_slider: false,
             message: format!("evolving from seed {seed} · {workers} workers"),
@@ -171,6 +182,8 @@ impl App {
     }
 
     fn reset_progress(&mut self) {
+        self.trail.clear();
+        self.effects.clear();
         self.generation = None;
         self.watched = None;
         self.worker = None;
@@ -284,11 +297,11 @@ impl App {
 
     /// Advance the run for one frame.
     fn advance(&mut self, dt: f64) {
-        if self.controls.paused {
-            return;
-        }
         if self.generation.is_none() {
             self.start_generation();
+        }
+        if self.controls.paused {
+            return;
         }
         if self.generation.is_none() {
             return;
@@ -307,6 +320,10 @@ impl App {
         if let Some(world) = self.watched.as_mut() {
             while !world.done && stepped < wanted {
                 world.step_fixed();
+                if self.trails && speed <= 16.0 {
+                    self.effects
+                        .observe((self.run.generation(), self.watched_member), world, true);
+                }
                 stepped += 1;
                 if stepped & 255 == 0 && started.elapsed().as_secs_f64() >= SIM_BUDGET {
                     break;
@@ -444,6 +461,8 @@ impl App {
             self.controls.seed_editing = false;
             return;
         };
+        self.focus = Some(hit);
+        self.pressed = Some(hit);
         match hit {
             ui::Hit::SpeedSlider => {
                 self.dragging_slider = true;
@@ -483,6 +502,42 @@ impl App {
             return;
         }
         match key {
+            Key::Named(NamedKey::Tab) => {
+                let index = self
+                    .focus
+                    .and_then(|hit| ui::FOCUS_ORDER.iter().position(|h| *h == hit))
+                    .map_or(0, |i| (i + 1) % ui::FOCUS_ORDER.len());
+                self.focus = Some(ui::FOCUS_ORDER[index]);
+                self.controls.seed_editing = self.focus == Some(ui::Hit::SeedField);
+            }
+            Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight)
+                if self.focus == Some(ui::Hit::SpeedSlider) =>
+            {
+                let direction = if *key == Key::Named(NamedKey::ArrowRight) {
+                    0.025
+                } else {
+                    -0.025
+                };
+                self.controls.speed = ui::Controls::speed_from_slider(
+                    ui::Controls::slider_from_speed(self.controls.speed) + direction,
+                );
+            }
+            Key::Named(NamedKey::Enter)
+                if self.focus.is_some() && self.focus != Some(ui::Hit::SeedField) =>
+            {
+                if let (Some(hit), Some(layout)) = (self.focus, self.layout()) {
+                    let point = layout.control_rect(hit).center();
+                    let cursor = self.cursor;
+                    self.cursor = Some(PhysicalPosition::new(
+                        (point[0] * self.dpr()) as f64,
+                        (point[1] * self.dpr()) as f64,
+                    ));
+                    self.on_press();
+                    self.cursor = cursor;
+                    self.pressed = None;
+                    self.dragging_slider = false;
+                }
+            }
             Key::Named(NamedKey::Space) => self.controls.paused = !self.controls.paused,
             Key::Named(NamedKey::Escape) => self.controls.seed_editing = false,
             Key::Named(NamedKey::Backspace) => {
@@ -517,6 +572,11 @@ impl App {
                     return;
                 }
                 match text.to_lowercase().as_str() {
+                    "m" => {
+                        self.trails = !self.trails;
+                        self.trail.clear();
+                        self.effects.clear();
+                    }
                     "r" => self.controls.rays = !self.controls.rays,
                     "s" => self.save_best(),
                     "l" => self.load_next(),
@@ -550,30 +610,32 @@ impl App {
         // The Arena keeps its 960×600 shape and scales into whatever space the
         // sidebar leaves; the panels stay at 1:1 and stay legible (ADR 0006).
         if let Some(world) = self.watched.as_ref() {
-            let fit = (layout.arena.w / theme::layout::ARENA_WIDTH)
-                .min(layout.arena.h / theme::layout::ARENA_HEIGHT)
-                .max(0.05);
-            let inner = [
-                theme::layout::ARENA_WIDTH * fit,
-                theme::layout::ARENA_HEIGHT * fit,
-            ];
-            let origin = [
-                (layout.arena.x + (layout.arena.w - inner[0]) * 0.5) * dpr,
-                (layout.arena.y + (layout.arena.h - inner[1]) * 0.5) * dpr,
-            ];
-            scene::draw_arena(
-                painter,
+            let view = observatory::arena_view(layout.arena, dpr);
+            self.trail.observe(
+                (self.run.generation(), self.watched_member),
                 world,
-                ArenaView {
-                    origin,
-                    scale: fit * dpr,
-                },
-                self.controls.rays,
+                self.trails,
             );
+            scene::draw_arena(painter, world, view, self.controls.rays);
+            self.trail.draw(painter, view);
+            self.effects.observe(
+                (self.run.generation(), self.watched_member),
+                world,
+                self.trails && self.controls.speed <= 16.0,
+            );
+            self.effects.draw(painter, view);
         }
         painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
 
         let world = self.watched.as_ref();
+        observatory::draw_chrome(
+            painter,
+            layout.arena,
+            world,
+            self.seed,
+            &self.controls,
+            self.trails,
+        );
         let info = panels::HudInfo {
             seed: self.seed,
             generation: self.run.generation(),
@@ -610,6 +672,14 @@ impl App {
             }
         }
         panels::draw_controls(painter, &layout, &self.controls, self.hot);
+        if let Some(hit) = self.focus {
+            let r = layout.control_rect(hit).inset(2.0);
+            painter.rect_outline(r.x, r.y, r.w, r.h, theme::color::ACCENT.alpha(0.8));
+        }
+        if let Some(hit) = self.pressed {
+            let r = layout.control_rect(hit);
+            painter.rect(r.x, r.y, r.w, r.h, theme::color::ACCENT.alpha(0.12));
+        }
         let (status, is_error) = match crate::gpu::take_error() {
             Some(error) => (error, true),
             None => (self.message.clone(), self.message_is_error),
@@ -733,7 +803,7 @@ impl ApplicationHandler for App {
         }
         let attributes = Window::default_attributes()
             .with_title("NeuroArena")
-            .with_inner_size(LogicalSize::new(1440.0, 720.0))
+            .with_inner_size(LogicalSize::new(1440.0, 900.0))
             .with_min_inner_size(LogicalSize::new(900.0, 560.0));
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
@@ -823,7 +893,10 @@ impl ApplicationHandler for App {
                 if button == MouseButton::Left {
                     match state {
                         ElementState::Pressed => self.on_press(),
-                        ElementState::Released => self.dragging_slider = false,
+                        ElementState::Released => {
+                            self.dragging_slider = false;
+                            self.pressed = None;
+                        }
                     }
                 }
             }

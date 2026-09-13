@@ -12,7 +12,7 @@ use cosmic_text::{
 
 use crate::atlas::{Atlas, GlyphCache, Slot};
 use crate::gpu::Gpu;
-use crate::painter::{Align, TextItem};
+use crate::painter::{Align, TextItem, Typeface};
 
 /// One glyph quad.
 #[repr(C)]
@@ -38,6 +38,12 @@ pub struct TextRenderer {
 impl TextRenderer {
     pub fn new(gpu: &Gpu, layout: &wgpu::BindGroupLayout) -> Self {
         let mut font_system = FontSystem::new();
+        font_system
+            .db_mut()
+            .load_font_data(include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf").to_vec());
+        font_system
+            .db_mut()
+            .load_font_data(include_bytes!("../assets/fonts/SpaceGrotesk.ttf").to_vec());
         let buffer = Buffer::new(&mut font_system, Metrics::new(12.0, 16.0));
         Self {
             font_system,
@@ -81,7 +87,11 @@ impl TextRenderer {
     fn build_item(&mut self, gpu: &Gpu, item: &TextItem) {
         // Monospace by family, and a line height that keeps the descenders of
         // one row clear of the caps of the next.
-        let attrs = Attrs::new().family(Family::Monospace);
+        let family = match item.face {
+            Typeface::Display => "Space Grotesk",
+            Typeface::Mono => "JetBrains Mono",
+        };
+        let attrs = Attrs::new().family(Family::Name(family));
         self.buffer
             .set_metrics(Metrics::new(item.size, item.size * 1.3));
         self.buffer.set_size(Some(8192.0), None);

@@ -42,6 +42,7 @@ For formatting, linting, tests, coverage, dependency checks, and Git hooks, see
 | ------------------------ | --------------------------------------------------------------------------------------------- |
 | Pause / Resume (`space`) | freeze the run and study what the current Ship is doing                                       |
 | Speed slider             | 1× real time up to ∞ "as fast as the machine allows"; the achieved rate is measured and shown |
+| Motion (`m`)             | toggle trails and collision echoes; reduced motion preserves all telemetry                    |
 | Rays (`r`)               | overlay the Ship's 9 Sensor Rays                                                              |
 | Restart                  | replay the pinned seed from Generation 1, or the watched Genome                               |
 | New seed                 | roll a fresh seed and start a new lineage                                                     |
@@ -53,6 +54,17 @@ For formatting, linting, tests, coverage, dependency checks, and Git hooks, see
 The Arena keeps its 960×600 logical shape at any window size, so a seed means
 the same thing in a small window and a full-screen one (ADR 0006). Windows can
 be resized freely; the sidebar keeps its size so the numbers stay legible.
+
+The flight observatory shows sampled Sensor Rays in a Ship-relative polar instrument,
+signed threat telemetry, and actual motor requests. The Network highlights its two
+strongest incoming weighted signals per node; solid paths are positive, dashed paths
+negative. These are weighted activations, not confidence or causal explanations.
+A chevron shows actual velocity; the bracket and hull-clearance label identify the
+nearest Asteroid geometrically. Collision echoes are bounded and suppressed above 16×.
+At small window sizes, the Network becomes a named output snapshot.
+
+See the [native visual audit and verification report](docs/research/native-visual-upgrade.md)
+for matched captures, source research, licenses, and performance evidence.
 
 ## Seeds and reproducibility
 
@@ -87,7 +99,8 @@ A Cargo workspace with two members:
   without a display. The headless runner is a binary target of this crate, not a
   separate crate, so it compiles against exactly the API the app uses.
 - **`app`** — the window (`winit`), the renderer (`wgpu`), text (`cosmic-text`)
-  and the panels. The frame graph, the 2D geometry and the panel layout are
+  and the panels. Lyon tessellates the instrument arcs and signed signal paths.
+  The frame graph, the 2D geometry and the panel layout are
   written here; there is no UI framework, by decision (ADR 0004).
 
 The vocabulary is the project's own and lives in [`CONTEXT.md`](CONTEXT.md):

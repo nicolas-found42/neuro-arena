@@ -552,3 +552,37 @@ fn the_agent_carries_its_network_for_the_panel() {
     }
     assert!(genome.node_type(0) == Some(NodeType::Input));
 }
+
+#[test]
+fn collision_snapshots_report_resolved_positions_and_expire_next_step() {
+    let mut world = quiet_world(12);
+    world.agent.ship.x = 100.0;
+    world.agent.ship.y = 100.0;
+    world.asteroids.push(asteroid(Size::Large, 580.0, 300.0));
+    world.bullets.push(sim::Bullet {
+        x: 580.0,
+        y: 300.0,
+        vx: 0.0,
+        vy: 0.0,
+        life: 1.0,
+    });
+    world.step_fixed();
+    let snapshot: Vec<_> = world.impacts().copied().collect();
+    assert_eq!(
+        snapshot,
+        vec![sim::world::Impact {
+            x: 580.0,
+            y: 300.0,
+            radius: Size::Large.radius(),
+            ship: false
+        }]
+    );
+    assert_eq!(world.asteroids.len(), 2);
+    assert_eq!(
+        world.impacts().copied().collect::<Vec<_>>(),
+        snapshot,
+        "reading is non-consuming"
+    );
+    world.step_fixed();
+    assert_eq!(world.impacts().count(), 0);
+}

@@ -89,16 +89,29 @@ pub enum Hit {
     SeedField,
 }
 
+/// Keyboard traversal follows the visual reading order of the control strip.
+pub const FOCUS_ORDER: [Hit; 9] = [
+    Hit::Pause,
+    Hit::Rays,
+    Hit::Evolve,
+    Hit::Restart,
+    Hit::NewSeed,
+    Hit::Save,
+    Hit::Load,
+    Hit::SeedField,
+    Hit::SpeedSlider,
+];
+
 /// The five stacked sidebar panels, top to bottom: HUD, Chart, Network,
 /// Controls, Status.
 const PANELS: usize = 5;
 
 /// Their natural heights. With the margins and gaps paid, the whole stack fits a
 /// 700-pixel-tall window without shrinking anything.
-const NATURAL: [f32; PANELS] = [164.0, 128.0, 154.0, 154.0, 40.0];
+const NATURAL: [f32; PANELS] = [216.0, 120.0, 180.0, 154.0, 40.0];
 
 /// The height each panel gives way to before the next one shrinks.
-const MINIMUM: [f32; PANELS] = [104.0, 56.0, 60.0, 92.0, 26.0];
+const MINIMUM: [f32; PANELS] = [160.0, 56.0, 96.0, 140.0, 26.0];
 
 /// Shrink order once the stack no longer fits: the Network gives way first, then
 /// the Chart, then the furniture.
@@ -178,6 +191,20 @@ impl Layout {
         }
     }
 
+    pub fn control_rect(&self, hit: Hit) -> Rect {
+        match hit {
+            Hit::Pause => self.pause,
+            Hit::Rays => self.rays,
+            Hit::Restart => self.restart,
+            Hit::NewSeed => self.new_seed,
+            Hit::Save => self.save,
+            Hit::Load => self.load,
+            Hit::Evolve => self.evolve,
+            Hit::SpeedSlider => self.speed_slider,
+            Hit::SeedField => self.seed_field,
+        }
+    }
+
     /// Which control a window-pixel point hits, if any.
     pub fn hit(&self, p: [f32; 2]) -> Option<Hit> {
         [
@@ -202,6 +229,8 @@ impl Layout {
 fn stack(available: f32) -> [f32; PANELS] {
     let available = (available - GAP * (PANELS - 1) as f32).max(0.0);
     let mut heights = NATURAL;
+    // Give spare height to learning inspection instead of leaving an empty dock.
+    heights[2] += (available - NATURAL.iter().sum::<f32>()).max(0.0);
     let mut deficit = heights.iter().sum::<f32>() - available;
     if deficit > 0.0 {
         for index in SHRINK {
@@ -505,7 +534,7 @@ mod tests {
 
     #[test]
     fn the_sidebar_never_scales_with_the_window() {
-        let normal = Layout::new(1200.0, 700.0);
+        let normal = Layout::new(1200.0, 900.0);
         let huge = Layout::new(3840.0, 2160.0);
         // Docked right at a fixed width, full height, and the panels inside it
         // keep both their size and their place relative to it.
@@ -520,7 +549,9 @@ mod tests {
             ("speed slider", normal.speed_slider, huge.speed_slider),
         ] {
             assert_eq!(rect.w, other.w, "{name} width follows the window");
-            assert_eq!(rect.h, other.h, "{name} height follows the window");
+            if name != "network" {
+                assert_eq!(rect.h, other.h, "{name} height follows the window");
+            }
             assert_eq!(
                 rect.x - normal.sidebar.x,
                 other.x - huge.sidebar.x,
@@ -533,21 +564,22 @@ mod tests {
     }
 
     #[test]
-    fn a_seven_hundred_pixel_window_keeps_every_panel_at_its_natural_height() {
-        let layout = Layout::new(1200.0, 700.0);
+    fn a_tall_window_gives_spare_height_to_network_inspection() {
+        let layout = Layout::new(1200.0, 900.0);
         assert_eq!(layout.hud.h, NATURAL[0]);
         assert_eq!(layout.chart.h, NATURAL[1]);
-        assert_eq!(layout.network.h, NATURAL[2]);
+        assert!(layout.network.h > NATURAL[2]);
+        assert!((layout.status.bottom() - 888.0).abs() < 0.01);
         assert_eq!(layout.controls.h, NATURAL[3]);
         assert_eq!(layout.status.h, NATURAL[4]);
         // The stack is top-anchored in the docked column and fits with slack to
         // spare; a taller window leaves that slack below it rather than scaling.
-        assert!(layout.status.bottom() <= 700.0 - MARGIN);
+        assert!(layout.status.bottom() <= 900.0 - MARGIN);
     }
 
     #[test]
     fn a_short_window_shrinks_the_network_first_then_the_chart() {
-        let middling = Layout::new(1200.0, 620.0);
+        let middling = Layout::new(1200.0, 740.0);
         assert!(
             middling.network.h < NATURAL[2],
             "the Network gives way first"

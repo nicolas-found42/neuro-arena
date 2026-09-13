@@ -105,6 +105,16 @@ pub struct Bullet {
     pub life: f64,
 }
 
+/// A collision already resolved by physics. Presentation may read the last step's
+/// bounded record; it cannot change the outcome or consume simulation randomness.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Impact {
+    pub x: f64,
+    pub y: f64,
+    pub radius: f64,
+    pub ship: bool,
+}
+
 /// One Episode: the Arena, one Agent, one asteroid field.
 pub struct World {
     rng: Rng,
@@ -118,6 +128,7 @@ pub struct World {
     pub asteroids: Vec<Asteroid>,
     pub bullets: Vec<Bullet>,
     asteroid_count: usize,
+    impacts: [Option<Impact>; bullet::MAX_ALIVE_PER_SHIP as usize + 1],
 }
 
 impl World {
@@ -156,6 +167,7 @@ impl World {
             asteroids: Vec::new(),
             bullets: Vec::new(),
             asteroid_count: ast::INITIAL_COUNT,
+            impacts: [None; bullet::MAX_ALIVE_PER_SHIP as usize + 1],
         };
         world.spawn_wave();
         world
@@ -164,6 +176,16 @@ impl World {
     /// Step the World by the fixed timestep.
     pub fn step_fixed(&mut self) {
         self.step(DT);
+    }
+
+    pub fn impacts(&self) -> impl Iterator<Item = &Impact> {
+        self.impacts.iter().flatten()
+    }
+
+    fn record_impact(&mut self, impact: Impact) {
+        if let Some(slot) = self.impacts.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(impact);
+        }
     }
 
     /// Run to Episode end, or to the hard cap. Returns the number of steps run.
@@ -180,6 +202,7 @@ impl World {
     }
 
     pub fn step(&mut self, dt: f64) {
+        self.impacts.fill(None);
         self.time += dt;
         let hit_pad = ship_cfg::RADIUS * ship_cfg::HITBOX_FACTOR;
 
@@ -264,6 +287,12 @@ impl World {
                 let rr = asteroid.r + hit_pad;
                 if dx * dx + dy * dy < rr * rr {
                     self.agent.alive = false;
+                    self.impacts[0] = Some(Impact {
+                        x: ship.x,
+                        y: ship.y,
+                        radius: ship_cfg::RADIUS,
+                        ship: true,
+                    });
                     break;
                 }
             }
@@ -294,6 +323,12 @@ impl World {
                     self.agent.bullets_out = self.agent.bullets_out.saturating_sub(1);
                     self.agent.fitness += asteroid.points;
                     self.agent.stats.asteroid_points += asteroid.points;
+                    self.record_impact(Impact {
+                        x: asteroid.x,
+                        y: asteroid.y,
+                        radius: asteroid.r,
+                        ship: false,
+                    });
                     self.split_asteroid(asteroid_index);
                     break;
                 }

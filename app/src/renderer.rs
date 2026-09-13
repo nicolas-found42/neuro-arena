@@ -1,8 +1,8 @@
 //! The renderer: the frame graph the app owns, on top of `wgpu`.
 //!
-//! Three pipelines cover everything the app draws — filled triangles for the
-//! Arena and the panels, a line list for outlines and connections, and a
-//! textured pipeline for glyph quads. One uniform carries the viewport the
+//! Ordered, alpha-blended triangles cover shapes and strokes; a textured
+//! pipeline covers glyph quads. Both resolve through a cached 4× MSAA target.
+//! One uniform carries the viewport the
 //! logical coordinates are measured against.
 //!
 //! There is no framework here on purpose (ADR 0004): this is the whole of the
@@ -11,7 +11,7 @@
 use bytemuck::cast_slice;
 
 use crate::gpu::{Gpu, VertexBuffer};
-use crate::painter::{LineVertex, Painter, TriangleVertex};
+use crate::painter::{Painter, TriangleVertex};
 use crate::text::{TextRenderer, TextVertex};
 
 pub const SHADER: &str = r#"
@@ -119,13 +119,12 @@ const TEXT_ATTRS: [wgpu::VertexAttribute; 3] = [
 
 pub struct Renderer {
     format: wgpu::TextureFormat,
+    msaa: Option<(u32, u32, wgpu::TextureView)>,
     viewport_buffer: wgpu::Buffer,
     viewport_bind_group: wgpu::BindGroup,
     triangles: wgpu::RenderPipeline,
-    lines: wgpu::RenderPipeline,
     glyphs: wgpu::RenderPipeline,
     triangle_buffer: VertexBuffer,
-    line_buffer: VertexBuffer,
     glyph_buffer: VertexBuffer,
     text: TextRenderer,
     /// Quads drawn in the last frame, for diagnostics and the status bar.
@@ -237,7 +236,10 @@ impl Renderer {
                         conservative: false,
                     },
                     depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
+                    multisample: wgpu::MultisampleState {
+                        count: 4,
+                        ..Default::default()
+                    },
                     fragment: Some(wgpu::FragmentState {
                         module: &shader,
                         entry_point: Some(fs),
@@ -265,14 +267,6 @@ impl Renderer {
             &shape_buffers,
             "vs_shape",
             "fs_shape",
-            false,
-        );
-        let lines = pipeline(
-            "lines",
-            wgpu::PrimitiveTopology::LineList,
-            &shape_buffers,
-            "vs_shape",
-            "fs_shape",
             true,
         );
         let glyphs = pipeline(
@@ -287,13 +281,12 @@ impl Renderer {
         let text = TextRenderer::new(gpu, &glyph_layout);
         Self {
             format,
+            msaa: None,
             viewport_buffer,
             viewport_bind_group,
             triangles,
-            lines,
             glyphs,
             triangle_buffer: VertexBuffer::default(),
-            line_buffer: VertexBuffer::default(),
             glyph_buffer: VertexBuffer::default(),
             text,
             last_glyphs: 0,
@@ -306,7 +299,29 @@ impl Renderer {
 
     /// The extent the coordinates of this frame are measured in, in the same
     /// pixels the Painter emitted (window physical pixels).
-    pub fn set_viewport(&self, gpu: &Gpu, width: f32, height: f32) {
+    pub fn set_viewport(&mut self, gpu: &Gpu, width: f32, height: f32) {
+        let (w, h) = (width.max(1.0) as u32, height.max(1.0) as u32);
+        if self
+            .msaa
+            .as_ref()
+            .is_none_or(|(old_w, old_h, _)| (*old_w, *old_h) != (w, h))
+        {
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("arena-4x-msaa"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 4,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            self.msaa = Some((w, h, texture.create_view(&Default::default())));
+        }
         let uniform: [f32; 4] = [width, height, 0.0, 0.0];
         gpu.queue
             .write_buffer(&self.viewport_buffer, 0, cast_slice(&uniform));
@@ -332,12 +347,6 @@ impl Renderer {
             cast_slice(&painter.triangles),
             std::mem::size_of::<TriangleVertex>(),
         );
-        self.line_buffer.upload(
-            gpu,
-            "line-vertices",
-            cast_slice(&painter.lines),
-            std::mem::size_of::<LineVertex>(),
-        );
         self.glyph_buffer.upload(
             gpu,
             "glyph-vertices",
@@ -354,8 +363,8 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
+                    view: &self.msaa.as_ref().expect("set viewport before rendering").2,
+                    resolve_target: Some(view),
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
@@ -377,13 +386,6 @@ impl Renderer {
                 if let Some(slice) = self.triangle_buffer.slice() {
                     pass.set_vertex_buffer(0, slice);
                     pass.draw(0..self.triangle_buffer.vertices, 0..1);
-                }
-            }
-            if self.line_buffer.vertices > 0 {
-                pass.set_pipeline(&self.lines);
-                if let Some(slice) = self.line_buffer.slice() {
-                    pass.set_vertex_buffer(0, slice);
-                    pass.draw(0..self.line_buffer.vertices, 0..1);
                 }
             }
             if glyph_count > 0 {

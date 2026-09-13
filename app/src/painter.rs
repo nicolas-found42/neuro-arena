@@ -2,7 +2,7 @@
 //! reaches the GPU.
 //!
 //! Everything on screen is produced by pushing into a `Painter`: triangles,
-//! lines, and text anchors. Triangles and lines are already in window pixels;
+//! strokes, and text anchors. Triangles are already in window pixels;
 //! text carries an anchor and an alignment, and the text renderer resolves the
 //! alignment once it has shaped the string, so no caller ever has to measure
 //! text itself.
@@ -128,14 +128,6 @@ impl Transform {
     }
 }
 
-/// One solid-colour vertex edge.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LineVertex {
-    pub pos: [f32; 2],
-    pub color: [f32; 4],
-}
-
 /// One triangle vertex.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -144,9 +136,16 @@ pub struct TriangleVertex {
     pub color: [f32; 4],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Typeface {
+    Mono,
+    Display,
+}
+
 /// A string to draw, anchored at a window-pixel position.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextItem {
+    pub face: Typeface,
     pub pos: [f32; 2],
     pub size: f32,
     pub color: Rgba,
@@ -158,9 +157,10 @@ pub struct TextItem {
 #[derive(Default)]
 pub struct Painter {
     pub triangles: Vec<TriangleVertex>,
-    pub lines: Vec<LineVertex>,
     pub text: Vec<TextItem>,
     transform: Transform,
+    clip: Option<[f32; 4]>,
+    paths: crate::vector::Paths,
 }
 
 impl Painter {
@@ -171,9 +171,9 @@ impl Painter {
     /// Start a frame: drop the previous one and reset the transform.
     pub fn clear(&mut self) {
         self.triangles.clear();
-        self.lines.clear();
         self.text.clear();
         self.transform = Transform::IDENTITY;
+        self.clip = None;
     }
 
     pub fn set_transform(&mut self, transform: Transform) {
@@ -185,7 +185,7 @@ impl Painter {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.triangles.is_empty() && self.lines.is_empty() && self.text.is_empty()
+        self.triangles.is_empty() && self.text.is_empty()
     }
 
     #[inline]
@@ -194,13 +194,34 @@ impl Painter {
     }
 
     pub fn triangle(&mut self, a: [f32; 2], b: [f32; 2], c: [f32; 2], color: Rgba) {
+        let points = [self.point(a), self.point(b), self.point(c)];
         let color = color.to_linear();
-        for p in [a, b, c] {
-            self.triangles.push(TriangleVertex {
-                pos: self.point(p),
-                color,
-            });
+        if let Some(clip) = self.clip {
+            if points
+                .iter()
+                .any(|p| p[0] < clip[0] || p[1] < clip[1] || p[0] > clip[2] || p[1] > clip[3])
+            {
+                let points = clip_polygon(&points, clip);
+                for i in 1..points.len().saturating_sub(1) {
+                    for pos in [points[0], points[i], points[i + 1]] {
+                        self.triangles.push(TriangleVertex { pos, color });
+                    }
+                }
+                return;
+            }
         }
+        for pos in points {
+            self.triangles.push(TriangleVertex { pos, color });
+        }
+    }
+
+    /// Clip subsequent geometry to a rectangle in the current logical space.
+    pub fn set_clip(&mut self, rect: Option<[f32; 4]>) {
+        self.clip = rect.map(|r| {
+            let a = self.point([r[0], r[1]]);
+            let b = self.point([r[2], r[3]]);
+            [a[0], a[1], b[0], b[1]]
+        });
     }
 
     /// A convex quad, as two triangles.
@@ -233,15 +254,129 @@ impl Painter {
     }
 
     pub fn line(&mut self, a: [f32; 2], b: [f32; 2], color: Rgba) {
-        let color = color.to_linear();
-        self.lines.push(LineVertex {
-            pos: self.point(a),
+        self.stroke(a, b, 1.0, color);
+    }
+
+    /// A logical-width stroke in submission order with the filled geometry.
+    pub fn stroke(&mut self, a: [f32; 2], b: [f32; 2], width: f32, color: Rgba) {
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        let length = dx.hypot(dy);
+        if length < 0.001 || width <= 0.0 {
+            return;
+        }
+        let nx = -dy / length * width * 0.5;
+        let ny = dx / length * width * 0.5;
+        self.polygon(
+            &[
+                [a[0] + nx, a[1] + ny],
+                [b[0] + nx, b[1] + ny],
+                [b[0] - nx, b[1] - ny],
+                [a[0] - nx, a[1] - ny],
+            ],
             color,
+        );
+    }
+
+    /// Smooth radial illumination: interpolated vertex alpha, no stacked-disc bands.
+    pub fn glow(&mut self, center: [f32; 2], radius: f32, color: Rgba) {
+        for ring in 0..5 {
+            let inner = ring as f32 / 5.0;
+            let outer = (ring + 1) as f32 / 5.0;
+            let vertex = |r: f32, a: f32| {
+                (
+                    [
+                        center[0] + radius * r * a.cos(),
+                        center[1] + radius * r * a.sin(),
+                    ],
+                    color.alpha(color.a * 0.5 * (-4.0 * r * r).exp() * (1.0 - r)),
+                )
+            };
+            for i in 0..32 {
+                let a = i as f32 * std::f32::consts::TAU / 32.0;
+                let b = (i + 1) as f32 * std::f32::consts::TAU / 32.0;
+                self.gradient_triangle([vertex(inner, a), vertex(outer, a), vertex(outer, b)]);
+                if ring > 0 {
+                    self.gradient_triangle([vertex(inner, a), vertex(outer, b), vertex(inner, b)]);
+                }
+            }
+        }
+    }
+
+    fn gradient_triangle(&mut self, points: [([f32; 2], Rgba); 3]) {
+        let vertices = points.map(|(point, color)| TriangleVertex {
+            pos: self.point(point),
+            color: color.to_linear(),
         });
-        self.lines.push(LineVertex {
-            pos: self.point(b),
-            color,
-        });
+        let Some(clip) = self.clip.filter(|r| {
+            vertices
+                .iter()
+                .any(|v| v.pos[0] < r[0] || v.pos[1] < r[1] || v.pos[0] > r[2] || v.pos[1] > r[3])
+        }) else {
+            self.triangles.extend(vertices);
+            return;
+        };
+        let mut polygon = vertices.to_vec();
+        for (axis, boundary, lower) in [
+            (0, clip[0], true),
+            (1, clip[1], true),
+            (0, clip[2], false),
+            (1, clip[3], false),
+        ] {
+            let input = std::mem::take(&mut polygon);
+            let Some(mut previous) = input.last().copied() else {
+                break;
+            };
+            let inside = |v: TriangleVertex| {
+                if lower {
+                    v.pos[axis] >= boundary
+                } else {
+                    v.pos[axis] <= boundary
+                }
+            };
+            for current in input {
+                if inside(current) != inside(previous) {
+                    let t =
+                        (boundary - previous.pos[axis]) / (current.pos[axis] - previous.pos[axis]);
+                    let mut v = TriangleVertex {
+                        pos: std::array::from_fn(|i| {
+                            previous.pos[i] + t * (current.pos[i] - previous.pos[i])
+                        }),
+                        color: std::array::from_fn(|i| {
+                            previous.color[i] + t * (current.color[i] - previous.color[i])
+                        }),
+                    };
+                    v.pos[axis] = boundary;
+                    polygon.push(v);
+                }
+                if inside(current) {
+                    polygon.push(current);
+                }
+                previous = current;
+            }
+        }
+        for i in 1..polygon.len().saturating_sub(1) {
+            self.triangles
+                .extend([polygon[0], polygon[i], polygon[i + 1]]);
+        }
+    }
+
+    /// Smooth instrument arcs and connections, tessellated at display tolerance.
+    pub fn path(&mut self, path: &lyon_tessellation::path::Path, width: f32, color: Rgba) {
+        let mut paths = std::mem::take(&mut self.paths);
+        paths.draw(self, path, width, color);
+        self.paths = paths;
+    }
+
+    pub fn display_text(
+        &mut self,
+        pos: [f32; 2],
+        size: f32,
+        color: Rgba,
+        content: impl Into<String>,
+    ) {
+        self.text(pos, size, color, content);
+        self.text.last_mut().unwrap().face = Typeface::Display;
     }
 
     /// A connected run of segments; `closed` joins the last point to the first.
@@ -318,11 +453,94 @@ impl Painter {
         content: impl Into<String>,
     ) {
         self.text.push(TextItem {
+            face: Typeface::Mono,
             pos: self.point(pos),
             size: size * self.transform.scale,
             color,
             align,
             content: content.into(),
         });
+    }
+}
+
+/// Sutherland–Hodgman clipping, only used by triangles crossing a clip edge.
+fn clip_polygon(points: &[[f32; 2]], rect: [f32; 4]) -> Vec<[f32; 2]> {
+    let mut polygon = points.to_vec();
+    for (axis, boundary, lower) in [
+        (0, rect[0], true),
+        (1, rect[1], true),
+        (0, rect[2], false),
+        (1, rect[3], false),
+    ] {
+        let input = std::mem::take(&mut polygon);
+        if input.is_empty() {
+            break;
+        }
+        let inside = |p: [f32; 2]| {
+            if lower {
+                p[axis] >= boundary
+            } else {
+                p[axis] <= boundary
+            }
+        };
+        let mut previous = input[input.len() - 1];
+        for current in input {
+            if inside(current) != inside(previous) {
+                let t = (boundary - previous[axis]) / (current[axis] - previous[axis]);
+                let mut intersection = [
+                    previous[0] + t * (current[0] - previous[0]),
+                    previous[1] + t * (current[1] - previous[1]),
+                ];
+                intersection[axis] = boundary;
+                polygon.push(intersection);
+            }
+            if inside(current) {
+                polygon.push(current);
+            }
+            previous = current;
+        }
+    }
+    polygon
+}
+
+#[cfg(test)]
+mod clipping_tests {
+    use super::*;
+    #[test]
+    fn transformed_strokes_and_triangles_stay_inside_clip() {
+        let mut p = Painter::new();
+        p.set_transform(Transform::new(2.0, [10.0, 20.0]));
+        p.set_clip(Some([0.0, 0.0, 100.0, 60.0]));
+        p.triangle(
+            [-20.0, 30.0],
+            [50.0, -100.0],
+            [150.0, 100.0],
+            Rgba::rgb(1.0, 1.0, 1.0),
+        );
+        p.stroke([-100.0, 30.0], [200.0, 30.0], 4.0, Rgba::rgb(1.0, 1.0, 1.0));
+        assert!(!p.triangles.is_empty());
+        assert!(p.triangles.iter().all(|v| v.pos[0] >= 10.0
+            && v.pos[0] <= 210.0
+            && v.pos[1] >= 20.0
+            && v.pos[1] <= 140.0));
+        p.clear();
+        assert!(p.clip.is_none());
+    }
+}
+
+#[cfg(test)]
+mod typography_tests {
+    use super::*;
+    #[test]
+    fn typeface_is_independent_of_display_scale() {
+        for scale in [1.0, 2.0, 3.0] {
+            let mut p = Painter::new();
+            p.set_transform(Transform::new(scale, [0.0, 0.0]));
+            p.text([0.0, 0.0], 12.0, Rgba::rgb(1.0, 1.0, 1.0), "001.23");
+            p.display_text([0.0, 20.0], 32.0, Rgba::rgb(1.0, 1.0, 1.0), "NEUROARENA");
+            assert_eq!(p.text[0].face, Typeface::Mono);
+            assert_eq!(p.text[1].face, Typeface::Display);
+            assert_eq!(p.text[0].size, 12.0 * scale);
+        }
     }
 }

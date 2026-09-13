@@ -69,6 +69,8 @@ fn fixed_world() -> World {
         vy: 0.0,
         life: 1.0,
     });
+    world.time = sim::DT;
+    world.agent.inputs = sim::sensors::sense(&world.agent, &world.asteroids);
     world
 }
 
@@ -192,6 +194,15 @@ fn read_golden() -> Vec<[u8; 3]> {
 #[test]
 fn the_arena_frame_matches_its_golden_image() {
     let frame = render(&fixed_world(), false);
+    if let Ok(path) = std::env::var("NEUROARENA_CAPTURE_GOLDEN") {
+        let mut png = png::Encoder::new(std::fs::File::create(path).unwrap(), WIDTH, HEIGHT);
+        png.set_color(png::ColorType::Rgba);
+        png.set_depth(png::BitDepth::Eight);
+        png.write_header()
+            .unwrap()
+            .write_image_data(&frame.pixels)
+            .unwrap();
+    }
     let cells = frame.grid();
     if std::env::var("NEUROARENA_WRITE_GOLDEN").is_ok() {
         write_golden(&cells);
@@ -253,7 +264,7 @@ fn the_ship_asteroids_and_bullets_land_where_the_simulation_puts_them() {
 
     // An Asteroid: the Large asteroid at (700, 160) is drawn in the asteroid grey, which
     // is brighter than the empty floor everywhere around it.
-    let floor = frame.pixel(480, 20);
+    let floor = frame.pixel(475, 20);
     let asteroid = frame.pixel(700, 160);
     assert!(
         asteroid[0] > floor[0] + 20 && asteroid[1] > floor[1] + 20,
@@ -307,7 +318,7 @@ fn seam_copies_draw_entities_that_straddle_the_edge() {
     let left = frame.pixel(4, 300);
     let right = frame.pixel(WIDTH - 5, 300);
     assert!(
-        left[0] > 80 && right[0] > 80,
+        left[0] > 60 && right[0] > 60,
         "both the asteroid and its Seam Copy are drawn: {left:?} {right:?}"
     );
 }

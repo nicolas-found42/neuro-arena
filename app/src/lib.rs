@@ -7,7 +7,10 @@
 
 pub mod appstate;
 pub mod atlas;
+pub mod effects;
 pub mod gpu;
+pub mod instruments;
+pub mod observatory;
 pub mod painter;
 pub mod panels;
 pub mod renderer;
@@ -15,6 +18,7 @@ pub mod scene;
 pub mod text;
 pub mod theme;
 pub mod ui;
+pub mod vector;
 
 /// Open the window and run until the user closes it.
 pub fn run() {
