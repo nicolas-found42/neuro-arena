@@ -32,6 +32,13 @@ pub(crate) const PANEL_PAD: f32 = 8.0;
 pub(crate) const TITLE_H: f32 = 13.0;
 pub(crate) const TITLE_GAP: f32 = 4.0;
 
+/// The focus ring's clearance from the control it belongs to, and the weight of
+/// its stroke. The ring is drawn outside the control, never inside it: a face
+/// filled edge to edge — a toggled `On` key, the seed field — would swallow an
+/// inset ring, and focus has to survive every fill state.
+pub const FOCUS_RING_OFFSET: f32 = 2.0;
+pub const FOCUS_RING_WEIGHT: f32 = 1.5;
+
 /// A rectangle in window pixels. The left and top edges are inside and the right
 /// and bottom edges are outside, so rects that share an edge never overlap.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,6 +73,18 @@ impl Rect {
         )
     }
 
+    /// Grow on every side: `inset` the other way round, for a ring that has to
+    /// sit outside its control rather than inside it.
+    pub fn outset(&self, by: f32) -> Rect {
+        let by = by.max(0.0);
+        Rect::new(
+            self.x - by,
+            self.y - by,
+            self.w + 2.0 * by,
+            self.h + 2.0 * by,
+        )
+    }
+
     pub fn right(&self) -> f32 {
         self.x + self.w
     }
@@ -73,6 +92,13 @@ impl Rect {
     pub fn bottom(&self) -> f32 {
         self.y + self.h
     }
+}
+
+/// The rect the focus ring is stroked along for a control whose face is `face`:
+/// pushed out by the offset so that the whole band — the stroke weight straddles
+/// the line — clears the face it belongs to.
+pub fn focus_ring(face: Rect) -> Rect {
+    face.outset(FOCUS_RING_OFFSET + FOCUS_RING_WEIGHT * 0.5)
 }
 
 /// Every interactive target in the window.

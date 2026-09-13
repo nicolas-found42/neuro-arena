@@ -95,10 +95,27 @@ const HUD_BAR_W: f32 = 3.0;
 const HUD_BAR_H: f32 = 28.0;
 const HUD_NUMBER_INSET: f32 = 8.0;
 
-/// The Chart's area fill: brightest where it meets the mean curve, all but gone
-/// where it meets the floor.
+/// The Chart's area fill: the ink's alpha at the plot's crest and at its floor.
+/// The ramp between the two is a function of absolute height, one for the whole
+/// plot, which is what makes the fill a single sheet of light.
 const AREA_TOP: f32 = 0.28;
 const AREA_FLOOR: f32 = 0.02;
+
+/// The most gridlines the Chart's y axis will print, the explicit zero
+/// included. A shorter plot gets fewer, never a pile of labels.
+const GRID_MAX: usize = 4;
+
+/// How many rungs the axis asks the 1-2-5 ladder to divide its peak into,
+/// before the fit check steps the ladder up.
+const GRID_INTERVALS: usize = 3;
+
+/// The smallest gap two gridline labels may keep on a short plot.
+const GRID_GAP: f32 = 4.0;
+
+/// The least air a panel's heading leaves between its title and a readout set
+/// beside it: below this the readout is dropped rather than crowded onto the
+/// title.
+const TITLE_READOUT_GAP: f32 = 12.0;
 
 /// The speed slider's fill: full at the track's base, easing back to the fader,
 /// so the groove reads as lit travel rather than a progress bar.
@@ -158,13 +175,13 @@ pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
     painter.rect(body.x, body.y + 13.0, HUD_BAR_W, HUD_BAR_H, color::ACCENT);
     painter.text(
         [body.x + HUD_NUMBER_INSET, body.y + 13.0],
-        28.0,
+        font::HEADLINE,
         color::TEXT,
         format!("{:03}", info.generation),
     );
     painter.text(
         [mid, body.y + 13.0],
-        28.0,
+        font::HEADLINE,
         color::BEST,
         number(info.fitness),
     );
@@ -312,17 +329,45 @@ pub fn draw_hud(painter: &mut Painter, rect: Rect, info: &HudInfo) {
 /// (ADR 0003). Fitness is a breeding score — the shaping in it is the search's,
 /// not the operator's — so it rising says nothing about whether the ships fly
 /// better. Mean Waves is the headline Competence number, the one the Competence
-/// Gate rules on and the one a Candidate has to move, so that is what gets
-/// watched. The median and the p90 tail are reported as numbers in the headless
-/// table instead of drawn here: the mean is a fraction of a Wave while the tail
-/// is a whole number, and the two on one axis shrank the headline to nothing.
+/// Gate rules on and the one a Candidate has to move, so it is drawn as the
+/// subject: a line in [`color::BEST`] over a fill that brightens with it, with
+/// the newest reading printed beside the title, where the curve cannot reach it.
 ///
-/// The x axis is the run's own history, never a fixed window, and the y axis
-/// starts at zero so two Generations and five hundred read the same way.
+/// Behind the line stands what the Population actually spread across: the ribbon
+/// from its median Waves to its p90, in [`color::BAND`]. Both are whole Waves
+/// while the mean is a fraction of one, so on the mean's own scale the ribbon is
+/// often pinned to the top of the plot — which is the reading and not a fault:
+/// half the Population is at the floor and its tail is past this chart's
+/// ceiling, and the axis labels say by how much.
+///
+/// The x axis is the run's own history, never a fixed window. The y axis starts
+/// at an explicit zero and steps in 1-2-5 numbers, so two Generations and five
+/// hundred read the same way and every gridline is a round value.
 pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]) {
-    let body = frame(painter, rect, "02 / COMPETENCE · MEAN WAVES");
+    let title = "02 / COMPETENCE · MEAN WAVES";
+    let body = frame(painter, rect, title);
     if body.w < 40.0 || body.h < 20.0 {
         return;
+    }
+    // The newest mean, as the panel's own readout, beside the title: printed in
+    // the curve's own ink over the curve, where it used to be, it was a number
+    // nobody could read.
+    if let Some(latest) = history.last() {
+        let heading = title_row(rect);
+        let readout = waves(latest.mean_wave);
+        let spare = heading.w
+            - TITLE_INSET
+            - advance(title.chars().count(), font::HEADING)
+            - advance(readout.chars().count(), font::BODY);
+        if spare >= TITLE_READOUT_GAP {
+            painter.text_aligned(
+                [heading.right(), heading.y + (TITLE_H - font::BODY) * 0.5],
+                font::BODY,
+                color::TEXT,
+                Align::Right,
+                readout,
+            );
+        }
     }
     let axis_h = (font::SMALL + 4.0).min(body.h * 0.3);
     let gutter = advance(6, font::SMALL).min(body.w * 0.25);
@@ -342,19 +387,6 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         1.0,
         color::VIGNETTE.alpha(0.7),
     );
-    for fraction in [0.25, 0.5, 0.75] {
-        let y = plot.bottom() - plot.h * fraction;
-        painter.line(
-            [plot.x, y],
-            [plot.right(), y],
-            color::PANEL_BORDER.alpha(0.35),
-        );
-    }
-    // Two hairlines carry the reading: the top of the range, and the middle of
-    // it. Both are fainter than the frame so the mean stays the subject.
-    for y in [plot.y, plot.y + plot.h * 0.5] {
-        painter.rect(plot.x, y, plot.w, 1.0, color::TEXT_DIM.alpha(0.10));
-    }
     painter.rect_outline(
         plot.x,
         plot.y,
@@ -363,7 +395,23 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
         color::PANEL_BORDER.alpha(0.6),
     );
 
+    // The axis, drawn under the data and measured from an explicit zero: what a
+    // plot is worth is only readable against a scale, and the scale is what
+    // tells the reader whether the run is standing still.
+    let peak = history
+        .iter()
+        .fold(0.0_f64, |top, stats| top.max(stats.mean_wave));
+    let axis = Axis::for_peak(peak, gridline_room(plot));
+    let scale = Scale {
+        peak: axis.peak,
+        zero: plot.bottom(),
+        height: plot.h,
+    };
+    axis_grid(painter, plot, &axis, &scale);
+
     if history.is_empty() {
+        // An instrument with nothing to plot still shows its scale, and says
+        // what it is waiting for rather than framing an empty box.
         painter.text_aligned(
             [plot.center()[0], line_y(plot.y, plot.h, font::SMALL)],
             font::SMALL,
@@ -375,12 +423,6 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
     }
 
     let count = history.len();
-    let highest = history
-        .iter()
-        .fold(0.0_f64, |top, stats| top.max(stats.mean_wave));
-    // An all-zero history would divide by nothing: keep the axis at 1 and draw
-    // the line along the floor.
-    let top = if highest > 0.0 { highest } else { 1.0 };
     let newest_index = count - 1;
     let x_at = |index: usize| -> f32 {
         if count == 1 {
@@ -389,85 +431,82 @@ pub fn draw_chart(painter: &mut Painter, rect: Rect, history: &[GenerationStats]
             plot.x + plot.w * (index as f32 / newest_index as f32)
         }
     };
-    let y_at =
-        |value: f64| -> f32 { plot.bottom() - plot.h * (value / top).clamp(0.0, 1.0) as f32 };
 
     // A long run has more Generations than the plot has pixels; sample the
-    // history at no more than one point per pixel column, newest included.
+    // history at no more than one point per pixel column, newest included. All
+    // three readings ride the same sampling, so the band can never drift against
+    // the line it stands behind.
     let stride = ((count as f32) / plot.w.max(1.0)).ceil().max(1.0) as usize;
-    let sampled = count.div_ceil(stride);
-    let mut mean_points: Vec<[f32; 2]> = Vec::with_capacity(sampled + 1);
+    let sample = |index: usize| Reading {
+        x: x_at(index),
+        mean: scale.y(history[index].mean_wave),
+        median: scale.y(f64::from(history[index].median_wave)),
+        tail: scale.y(f64::from(history[index].p90_wave)),
+    };
+    let mut readings: Vec<Reading> = Vec::with_capacity(count.div_ceil(stride) + 1);
     let mut index = 0;
     while index < count {
-        mean_points.push([x_at(index), y_at(history[index].mean_wave)]);
+        readings.push(sample(index));
         index += stride;
     }
     if !newest_index.is_multiple_of(stride) {
-        mean_points.push([x_at(newest_index), y_at(history[newest_index].mean_wave)]);
+        readings.push(sample(newest_index));
     }
 
-    if mean_points.len() < 2 {
-        painter.circle(mean_points[0], 2.5, color::BEST, 12);
+    if readings.len() < 2 {
+        painter.circle([readings[0].x, readings[0].mean], 2.5, color::BEST, 12);
     } else {
-        for points in mean_points.windows(2) {
-            // The area under the mean is filled column by column: light where it
-            // meets the curve, nothing where it meets the floor.
-            if let Some((fill, stops)) = area_fill(
-                points[0][0],
-                points[0][1],
-                points[1][0],
-                points[1][1],
-                plot.bottom(),
+        for pair in readings.windows(2) {
+            let (left, right) = (pair[0], pair[1]);
+            // The band first, then the fill, then the line: the spread is the
+            // range the Population held, the fill the subject's own light, and
+            // the line the reading itself.
+            if let Some((polygon, stops)) =
+                band_column(left.x, right.x, left.median, left.tail, color::BAND)
+            {
+                painter.gradient_polygon(&polygon, &stops);
+            }
+            if let Some((polygon, stops)) = area_fill(
+                left.x,
+                left.mean,
+                right.x,
+                right.mean,
+                &scale,
                 color::ACCENT,
             ) {
-                painter.gradient_polygon(&fill, &stops);
+                painter.gradient_polygon(&polygon, &stops);
             }
-            painter.stroke(points[0], points[1], 1.6, color::BEST);
+            painter.stroke([left.x, left.mean], [right.x, right.mean], 1.6, color::BEST);
         }
     }
 
-    // The largest value on the axis, and the newest mean at the edge it lands
-    // on. A mean is a fraction of a Wave, so both keep two decimals.
-    if highest > 0.0 {
-        painter.text_aligned(
-            [plot.x - 4.0, plot.y],
-            font::SMALL,
-            color::TEXT_DIM,
-            Align::Right,
-            waves(highest),
-        );
-    }
-    let newest_y = y_at(history[newest_index].mean_wave);
-    let newest_label_y = if newest_y - plot.y > font::SMALL + 6.0 {
-        newest_y - font::SMALL - 5.0
-    } else {
-        newest_y + 4.0
-    }
-    .clamp(plot.y, (plot.bottom() - font::SMALL).max(plot.y));
-    painter.text_aligned(
-        [plot.right() - 3.0, newest_label_y],
-        font::SMALL,
-        color::BEST,
-        Align::Right,
-        waves(history[newest_index].mean_wave),
-    );
-    painter.circle([x_at(newest_index) - 1.0, newest_y], 2.0, color::ACCENT, 10);
+    // The newest reading is marked where the line ends: the number itself stands
+    // beside the title, but the eye still needs the point it belongs to.
+    let last = readings[readings.len() - 1];
+    painter.circle([last.x - 1.0, last.mean], 2.0, color::ACCENT, 10);
     painter.set_gain(theme::light::LAMP);
-    painter.luminous_glow(
-        [x_at(newest_index) - 1.0, newest_y],
-        5.0,
-        color::ACCENT.alpha(0.5),
-    );
+    painter.luminous_glow([last.x - 1.0, last.mean], 5.0, color::ACCENT.alpha(0.5));
     painter.set_gain(1.0);
 
-    // The legend, in the corner the newest value does not claim.
-    let legend_y = plot.y + 3.0;
+    // The legend, in the corner the readout has left free: what the line is, and
+    // what the wash standing behind it is.
+    let legend_y = plot.y + 4.0;
     painter.line(
         [plot.x + 6.0, legend_y + 5.0],
         [plot.x + 18.0, legend_y + 5.0],
         color::BEST,
     );
     painter.text([plot.x + 22.0, legend_y], font::SMALL, color::BEST, "mean");
+    let band_x = plot.x + 22.0 + advance(4, font::SMALL) + 14.0;
+    if plot.right() - band_x >= advance(11, font::SMALL) {
+        painter.rect(band_x, legend_y + 2.0, 12.0, 6.0, color::BAND);
+        painter.text(
+            [band_x + 16.0, legend_y],
+            font::SMALL,
+            color::TEXT_DIM,
+            "median–p90",
+        );
+    }
 
     // Generations under the plot: the first, the newest, and what they count.
     let axis_y = plot.bottom() + 3.0;
@@ -519,10 +558,10 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
         for (i, id) in network.output_ids().iter().enumerate() {
             let x = body.x + (i % 2) as f32 * body.w * 0.5;
             let y = body.y + (i / 2) as f32 * row_h;
-            painter.text([x, y], 9.0, color::TEXT_DIM, OUTPUT_NAMES[i]);
+            painter.text([x, y], font::MICRO, color::TEXT_DIM, OUTPUT_NAMES[i]);
             painter.text_aligned(
                 [x + body.w * 0.5 - 8.0, y],
-                9.0,
+                font::MICRO,
                 color::TEXT,
                 Align::Right,
                 format!("{:+.2}", network.activation(*id)),
@@ -530,7 +569,7 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
         }
         painter.text(
             [body.x, body.bottom() - 11.0],
-            9.0,
+            font::MICRO,
             color::TEXT_DIM,
             format!(
                 "{} inputs / {} hidden / 5 outputs",
@@ -607,7 +646,7 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
         if columns.input_step >= 10.0 {
             painter.text(
                 [columns.inputs.x, columns.input_dot(rank)[1] - 5.0],
-                8.0,
+                font::FINE,
                 if lit > SIGNAL_LIT {
                     color::TEXT
                 } else {
@@ -716,7 +755,7 @@ pub fn draw_network(painter: &mut Painter, rect: Rect, genome: &Genome, network:
     if caption_h >= 25.0 {
         painter.text(
             [body.x, body.bottom() - 11.0],
-            8.0,
+            font::FINE,
             color::TEXT_DIM,
             "TOP 2/NODE  + SOLID / - DASHED  |a × w|",
         );
@@ -1233,6 +1272,13 @@ pub(crate) fn lit_surface(painter: &mut Painter, rect: Rect, base: Rgba, border:
     }
 }
 
+/// The heading row `frame` draws into `rect`: where a panel's own readouts sit
+/// when they belong beside the title rather than down in the body.
+fn title_row(rect: Rect) -> Rect {
+    let inner = rect.inset(PANEL_PAD);
+    Rect::new(inner.x, inner.y, inner.w, TITLE_H)
+}
+
 /// The panel body: `PANEL_BG` inside a `PANEL_BORDER` outline, with a
 /// `PANEL_TITLE` heading and the chrome every panel wears — a section tick, a
 /// heading rule that fades out to the right, and corner brackets. Returns the
@@ -1267,7 +1313,7 @@ fn frame(painter: &mut Painter, rect: Rect, title: &str) -> Rect {
     }
     let mut top = inner.y;
     if inner.h >= TITLE_H + TITLE_GAP {
-        let title_y = top + (TITLE_H - font::HEADING) * 0.5;
+        let title_y = title_row(rect).y + (TITLE_H - font::HEADING) * 0.5;
         painter.rect(
             inner.x,
             title_y + (font::HEADING - TICK_H) * 0.5,
@@ -1347,26 +1393,246 @@ fn faded(color: Rgba, fade: f32) -> Rgba {
     color.alpha(color.a * fade.clamp(0.0, 1.0))
 }
 
-/// One Chart column's fill: the quad from the curve down to the baseline, and
-/// its two stops — `AREA_TOP` at the curve, `AREA_FLOOR` at the floor. `None`
-/// when the column has no width or the curve is already lying on the floor.
+/// One sampled column of the Chart: where it stands across the plot, and the
+/// three readings the Population produced there. All three ride one sampling, so
+/// the band can never drift against the line it stands behind.
+#[derive(Clone, Copy)]
+struct Reading {
+    x: f32,
+    /// The mean Waves, in plot pixels.
+    mean: f32,
+    /// The median Waves, in plot pixels.
+    median: f32,
+    /// The 90th-percentile Waves, in plot pixels.
+    tail: f32,
+}
+
+/// The Chart's vertical scale: `0..peak` mapped onto the plot, an explicit zero
+/// at its foot and the peak at its crest. Everything the Chart draws is measured
+/// through [`Scale::y`], so a value past the peak — the Population's tail, often
+/// — is pinned to the crest rather than drawn outside the housing.
+struct Scale {
+    /// The value at the crest: the highest mean the run has scored.
+    peak: f64,
+    /// The pixel row the zero line sits on.
+    zero: f32,
+    /// The plot's height, in pixels.
+    height: f32,
+}
+
+impl Scale {
+    /// The row a value lands on. Anything outside `0..peak` is pinned to the
+    /// edge it ran past.
+    fn y(&self, value: f64) -> f32 {
+        let climbed = (value / self.peak).clamp(0.0, 1.0) as f32;
+        self.zero - self.height * climbed
+    }
+}
+
+/// The Chart's y axis: the 1-2-5 ladder its gridlines stand on, and the peak
+/// the scale reaches.
+///
+/// A 1-2-5 ladder is what makes an axis read in numbers people count in rather
+/// than in fractions of the data's own span — "0.1, 0.2, 0.3" instead of "0.083,
+/// 0.167, 0.25". The rule is d3-array's (ISC): the power of ten nearest the
+/// span, snapped to 1, 2 or 5 by where the error falls. plotters (MIT) computes
+/// the same key points for an `f64` range; either way it is a dozen lines, and
+/// the difference is whether a gridline is a round value.
+struct Axis {
+    /// The value at the crest.
+    peak: f64,
+    /// The distance between gridlines.
+    step: f64,
+    /// Every gridline value, from the explicit zero up to the last rung at or
+    /// below the peak.
+    ticks: Vec<f64>,
+}
+
+impl Axis {
+    /// The axis a peak of `peak` needs, printing no more than `max` gridlines:
+    /// the ladder is stepped up rather than a short plot crowded.
+    fn for_peak(peak: f64, max: usize) -> Axis {
+        // Nothing scored yet: a unit axis, so an empty Chart still has a scale.
+        let peak = if peak.is_finite() && peak > 0.0 {
+            peak
+        } else {
+            1.0
+        };
+        let mut step = tick_step(peak, GRID_INTERVALS);
+        while rungs(peak, step) > max {
+            step = next_rung(step);
+        }
+        let last = rungs(peak, step) - 1;
+        Axis {
+            peak,
+            step,
+            ticks: (0..=last).map(|k| k as f64 * step).collect(),
+        }
+    }
+}
+
+/// How many gridlines a ladder of `step` prints up to `peak`: the explicit zero
+/// and every rung at or below it. The epsilon covers the rung arithmetic lands a
+/// hair under, since 0.3 is not three tenths in binary.
+fn rungs(peak: f64, step: f64) -> usize {
+    ((peak / step + 1e-9).floor().max(0.0) as usize) + 1
+}
+
+/// The step an axis covering `span` in `intervals` counts in: the 1-2-5 rung
+/// nearest `span / intervals`, by the three geometric thresholds d3-array uses
+/// in its own tick increment.
+fn tick_step(span: f64, intervals: usize) -> f64 {
+    if span <= 0.0 || intervals == 0 {
+        return 1.0;
+    }
+    let rough = span / intervals as f64;
+    let power = 10f64.powf(rough.log10().floor());
+    let error = rough / power;
+    let multiplier = if error >= 50f64.sqrt() {
+        10.0
+    } else if error >= 10f64.sqrt() {
+        5.0
+    } else if error >= 2f64.sqrt() {
+        2.0
+    } else {
+        1.0
+    };
+    multiplier * power
+}
+
+/// The next rung up the 1-2-5 ladder: 0.2 from 0.1, 1 from 0.5, 20 from 10. The
+/// decade is read back off the step, so a mantissa that lands a hair past ten —
+/// logarithms are never quite exact — still climbs one rung rather than ten.
+fn next_rung(step: f64) -> f64 {
+    let decade = 10f64.powf(step.log10().floor());
+    let mantissa = step / decade;
+    if mantissa < 1.5 {
+        2.0 * decade
+    } else if mantissa < 3.5 {
+        5.0 * decade
+    } else if mantissa < 9.5 {
+        10.0 * decade
+    } else {
+        20.0 * decade
+    }
+}
+
+/// A gridline's label, written to the precision of the step it stands on: a
+/// ladder of tenths reads "0.1" and a ladder of hundreds never grows a decimal
+/// point. Four decimals is the most the gutter holds, so a ladder that fine is
+/// labelled to it rather than written wider than its own column. Zero is a bare
+/// `0`, because it is the baseline everything above it is measured from rather
+/// than a reading.
+fn tick_label(value: f64, step: f64) -> String {
+    if value == 0.0 {
+        return "0".to_string();
+    }
+    let decimals = ((-step.log10() - 1e-9).ceil().max(0.0) as usize).min(4);
+    format!("{value:.decimals$}")
+}
+
+/// How many gridlines the plot has room to label: one per line of `font::SMALL`
+/// plus a little air, between three — a baseline needs something to stand for —
+/// and [`GRID_MAX`].
+fn gridline_room(plot: Rect) -> usize {
+    let room = (plot.h / (font::SMALL + GRID_GAP)).floor() as usize + 1;
+    room.clamp(3, GRID_MAX)
+}
+
+/// The y axis as ink: a hairline per gridline with its value in the gutter, and
+/// the zero drawn a step brighter than the rest because every reading on the
+/// plot is measured from it.
+fn axis_grid(painter: &mut Painter, plot: Rect, axis: &Axis, scale: &Scale) {
+    let mut last_label = f32::INFINITY;
+    for (index, tick) in axis.ticks.iter().enumerate() {
+        // The zero lands on the plot's last row rather than a row below it, so
+        // the baseline is drawn inside the housing like everything else.
+        let line = scale
+            .y(*tick)
+            .clamp(plot.y, (plot.bottom() - 1.0).max(plot.y));
+        let ink = if index == 0 {
+            color::PANEL_EDGE.alpha(0.8)
+        } else {
+            color::PANEL_BORDER.alpha(0.45)
+        };
+        painter.rect(plot.x, line, plot.w, 1.0, ink);
+        // A plot too short to space its labels keeps its lines and drops the
+        // numbers that would collide: the zero is printed either way.
+        let label =
+            (line - font::SMALL * 0.5).clamp(plot.y, (plot.bottom() - font::SMALL).max(plot.y));
+        if index == 0 || label <= last_label - (font::SMALL + 1.0) {
+            painter.text_aligned(
+                [plot.x - 4.0, label],
+                font::SMALL,
+                color::TEXT_DIM,
+                Align::Right,
+                tick_label(*tick, axis.step),
+            );
+            last_label = label;
+        }
+    }
+}
+
+/// The Chart's fill ink at the absolute plot height `y`: one ramp across the
+/// whole plot, brightest at the crest and all but gone at the floor.
+///
+/// The ramp takes height alone, which is what keeps the fill a single sheet of
+/// light. A ramp per column instead left every column with its own span, so
+/// neighbouring columns disagreed along the edge they share — the vertical
+/// banding that read as texture rather than as data.
+fn fill_alpha(y: f32, scale: &Scale) -> f32 {
+    let climbed = ((scale.zero - y) / scale.height.max(1.0)).clamp(0.0, 1.0);
+    AREA_FLOOR + (AREA_TOP - AREA_FLOOR) * climbed
+}
+
+/// One Chart column's fill: the quad from the mean curve down to the baseline,
+/// and its four stops — the ramp sampled at each corner. `None` when the column
+/// has no width or the curve is already lying on the floor.
 fn area_fill(
     x0: f32,
     y0: f32,
     x1: f32,
     y1: f32,
-    baseline: f32,
+    scale: &Scale,
     ink: Rgba,
 ) -> Option<([[f32; 2]; 4], [Rgba; 4])> {
-    if x1 <= x0 || (y0 >= baseline && y1 >= baseline) {
+    if x1 <= x0 || (y0 >= scale.zero && y1 >= scale.zero) {
         return None;
     }
-    let curve = ink.alpha(AREA_TOP);
-    let floor = ink.alpha(AREA_FLOOR);
+    let stop = |y: f32| ink.alpha(fill_alpha(y, scale));
     Some((
-        [[x0, y0], [x1, y1], [x1, baseline], [x0, baseline]],
-        [curve, curve, floor, floor],
+        [[x0, y0], [x1, y1], [x1, scale.zero], [x0, scale.zero]],
+        [stop(y0), stop(y1), stop(scale.zero), stop(scale.zero)],
     ))
+}
+
+/// One Chart column of the Population's spread: the rectangle from its median
+/// Waves to its p90 over one Generation's width, in the band's own flat wash.
+/// `None` when the column has no width or the two are the same Waves — a
+/// Population whose middle and whose tail are both at zero has no range to draw.
+///
+/// The band holds each Generation's range across that Generation's own span
+/// rather than slanting from one to the next: the median and the p90 are whole
+/// Waves counted per Generation, so an edge between two of them would draw
+/// ranges in between that no Population ever had. The two edges are ordered
+/// here, because which of them stands higher on the plot is the data's business:
+/// the median cannot pass the p90, and the Chart should not depend on that.
+fn band_column(
+    x0: f32,
+    x1: f32,
+    median: f32,
+    tail: f32,
+    ink: Rgba,
+) -> Option<([[f32; 2]; 4], [Rgba; 4])> {
+    if x1 <= x0 {
+        return None;
+    }
+    let top = median.min(tail);
+    let bottom = median.max(tail);
+    if top >= bottom {
+        return None;
+    }
+    Some(([[x0, top], [x1, top], [x1, bottom], [x0, bottom]], [ink; 4]))
 }
 
 /// A centred line in the Display face. `Painter` aligns monospace runs itself,
@@ -1542,21 +1808,260 @@ mod tests {
         assert!(gradient_bar(10.0, 30.0, 4.0, 0.0, color::PANEL_BORDER, 0.9, 0.0).is_none());
     }
 
+    /// A Generation's stats, as the Chart reads them: nine of these fields are
+    /// somebody else's business, so only the four the Chart plots are named.
+    fn stats(generation: u32, mean: f64, median: u32, p90: u32) -> GenerationStats {
+        GenerationStats {
+            generation,
+            best: 0.0,
+            mean: 0.0,
+            mean_wave: mean,
+            median_wave: median,
+            p90_wave: p90,
+            clearing_share: 0.0,
+        }
+    }
+
+    /// A Chart panel of the size the sidebar gives it at 1440 × 900.
+    fn chart_rect() -> Rect {
+        Rect::new(1100.0, 232.0, 330.0, 120.0)
+    }
+
     #[test]
-    fn the_chart_fills_under_the_curve_and_never_below_the_floor() {
-        let (points, stops) = area_fill(0.0, 20.0, 5.0, 10.0, 40.0, color::ACCENT).unwrap();
+    fn the_chart_axis_steps_in_one_two_fives_and_never_crowds_the_plot() {
+        // A run that has got as far as 0.34 Waves reads against a ladder of
+        // tenths — 0, 0.1, 0.2, 0.3 — not against thirds of its own span.
+        assert!((tick_step(0.34, 3) - 0.1).abs() < 1e-12);
+        assert!((tick_step(0.34, 6) - 0.05).abs() < 1e-12);
+        let axis = Axis::for_peak(0.34, 4);
+        assert!((axis.step - 0.1).abs() < 1e-12);
+        assert_eq!(axis.ticks.len(), 4, "0, 0.1, 0.2, 0.3");
+
+        // Whatever the run has scored and however much room the plot has, the
+        // axis starts on an explicit zero, stays on the 1-2-5 ladder, and prints
+        // between two and four gridlines.
+        for peak in [
+            0.001, 0.01, 0.05, 0.1, 0.34, 0.5, 0.9, 1.0, 2.0, 4.2, 12.7, 55.0, 300.0, 1000.0,
+        ] {
+            for room in 3..=4 {
+                let axis = Axis::for_peak(peak, room);
+                assert!(
+                    (2..=room).contains(&axis.ticks.len()),
+                    "a peak of {peak} in room for {room} printed {:?}",
+                    axis.ticks
+                );
+                assert_eq!(axis.ticks[0], 0.0, "the zero baseline is explicit");
+                let decade = 10f64.powf(axis.step.log10().floor());
+                let mantissa = axis.step / decade;
+                assert!(
+                    [1.0, 2.0, 5.0]
+                        .iter()
+                        .any(|rung| (mantissa - rung).abs() < 1e-9),
+                    "a step of {} is not on the 1-2-5 ladder",
+                    axis.step
+                );
+                for pair in axis.ticks.windows(2) {
+                    assert!((pair[1] - pair[0] - axis.step).abs() < 1e-9);
+                }
+                assert!(axis.ticks.iter().all(|tick| *tick <= peak + 1e-9));
+            }
+        }
+
+        // Nothing scored yet still reads against a scale rather than dividing by
+        // nothing.
+        let empty = Axis::for_peak(0.0, 4);
+        assert_eq!(empty.peak, 1.0);
+        assert_eq!(empty.ticks.len(), 3);
+        // A label is written to its step's own precision, and the baseline is
+        // not written as a reading.
+        assert_eq!(tick_label(0.0, 0.1), "0");
+        assert_eq!(tick_label(0.30000000000000004, 0.1), "0.3");
+        assert_eq!(tick_label(0.05, 0.05), "0.05");
+        assert_eq!(tick_label(200.0, 100.0), "200");
+    }
+
+    #[test]
+    fn the_band_maps_the_median_to_the_p90_and_clamps_to_the_plot() {
+        // A plot a hundred pixels tall whose crest is one Wave.
+        let scale = Scale {
+            peak: 1.0,
+            zero: 100.0,
+            height: 100.0,
+        };
+        assert_eq!(scale.y(0.0), 100.0, "zero stands on the baseline");
+        assert_eq!(scale.y(1.0), 0.0, "the peak stands on the crest");
+        // A tail past the crest is pinned to it and a value under the floor to
+        // the floor: nothing the Chart plots leaves the plot.
+        assert_eq!(scale.y(2.0), 0.0);
+        assert_eq!(scale.y(-0.5), 100.0);
+
+        // Half the Population on zero Waves and the tail at one: the column runs
+        // from the baseline to the crest...
+        let (points, stops) =
+            band_column(10.0, 20.0, scale.y(0.0), scale.y(1.0), color::BAND).unwrap();
         assert_eq!(
             points,
-            [[0.0, 20.0], [5.0, 10.0], [5.0, 40.0], [0.0, 40.0]],
+            [[10.0, 0.0], [20.0, 0.0], [20.0, 100.0], [10.0, 100.0]]
+        );
+        assert!(
+            stops.iter().all(|stop| *stop == color::BAND),
+            "one flat wash, so a clamped column cannot band"
+        );
+        // The two edges are ordered, not trusted: a tail that somehow read below
+        // the median still draws a column rather than an inverted one.
+        let (points, _) = band_column(10.0, 20.0, 90.0, 40.0, color::BAND).unwrap();
+        assert_eq!(
+            points,
+            [[10.0, 40.0], [20.0, 40.0], [20.0, 90.0], [10.0, 90.0]]
+        );
+        // ...and where the middle and the tail are the same Waves there is no
+        // column at all, rather than a line of nothing.
+        assert!(band_column(10.0, 20.0, 50.0, 50.0, color::BAND).is_none());
+        assert!(band_column(20.0, 10.0, 40.0, 30.0, color::BAND).is_none());
+    }
+
+    #[test]
+    fn the_chart_fill_is_one_sheet_of_light_rather_than_a_column_of_it() {
+        let scale = Scale {
+            peak: 1.0,
+            zero: 100.0,
+            height: 100.0,
+        };
+        // Neighbouring columns agree along the edge they share, whatever their
+        // curves: the stops are a function of height, not of the column's own
+        // span, and that is what removes the vertical banding.
+        let (_, low) = area_fill(0.0, 60.0, 5.0, 40.0, &scale, color::ACCENT).unwrap();
+        let (_, high) = area_fill(5.0, 40.0, 10.0, 15.0, &scale, color::ACCENT).unwrap();
+        assert_eq!(low[1].a, high[0].a, "one ramp, so no step at a shared edge");
+        // The ramp climbs the plot: all but gone at the floor, AREA_TOP at the
+        // crest, brighter at every step between.
+        assert!((fill_alpha(100.0, &scale) - AREA_FLOOR).abs() < 1e-6);
+        assert!((fill_alpha(0.0, &scale) - AREA_TOP).abs() < 1e-6);
+        let ramp: Vec<f32> = [100.0, 75.0, 50.0, 25.0, 0.0]
+            .iter()
+            .map(|y| fill_alpha(*y, &scale))
+            .collect();
+        for pair in ramp.windows(2) {
+            assert!(pair[1] > pair[0], "the ramp dipped: {ramp:?}");
+        }
+        // The column still runs from the curve down to the baseline, and one
+        // lying on the floor still has no area under it.
+        let (points, _) = area_fill(0.0, 20.0, 5.0, 10.0, &scale, color::ACCENT).unwrap();
+        assert_eq!(
+            points,
+            [[0.0, 20.0], [5.0, 10.0], [5.0, 100.0], [0.0, 100.0]],
             "each column runs from the curve down to the baseline"
         );
-        assert_eq!([stops[0].a, stops[3].a], [AREA_TOP, AREA_FLOOR]);
-        assert!(stops[0].a > stops[3].a);
-        // A curve lying on the floor has no area under it, and a column with no
-        // width has nothing to fill either.
-        assert!(area_fill(0.0, 40.0, 5.0, 40.0, 40.0, color::ACCENT).is_none());
-        assert!(area_fill(0.0, 41.0, 5.0, 40.0, 40.0, color::ACCENT).is_none());
-        assert!(area_fill(5.0, 20.0, 5.0, 10.0, 40.0, color::ACCENT).is_none());
+        assert!(area_fill(0.0, 100.0, 5.0, 100.0, &scale, color::ACCENT).is_none());
+        assert!(area_fill(0.0, 101.0, 5.0, 100.0, &scale, color::ACCENT).is_none());
+        assert!(area_fill(5.0, 20.0, 5.0, 10.0, &scale, color::ACCENT).is_none());
+    }
+
+    #[test]
+    fn an_empty_chart_still_shows_its_scale_and_says_what_it_awaits() {
+        let rect = chart_rect();
+        let mut painter = Painter::new();
+        draw_chart(&mut painter, rect, &[]);
+        assert!(
+            painter
+                .text
+                .iter()
+                .any(|item| item.content == "Awaiting first Generation"),
+            "an empty Chart says so"
+        );
+        // Behind the message is a real axis: a labelled ladder running up the
+        // plot, lowest value at the bottom, every label inside the panel.
+        let label = |content: &str| {
+            painter
+                .text
+                .iter()
+                .find(|item| item.content == content)
+                .unwrap_or_else(|| panic!("no {content} gridline on an empty Chart"))
+                .clone()
+        };
+        let (zero, middle, top) = (label("0"), label("0.5"), label("1.0"));
+        assert!(zero.pos[1] > middle.pos[1] && middle.pos[1] > top.pos[1]);
+        for item in [&zero, &middle, &top] {
+            assert!(item.pos[0] < rect.right() && item.pos[1] > rect.y);
+        }
+        // And the zero is drawn, not merely written: a hairline spans the plot
+        // just under its label.
+        let mut span = 0.0_f32;
+        for row in 0..=font::SMALL as usize {
+            let row_y = zero.pos[1] + row as f32;
+            let mut left = f32::INFINITY;
+            let mut right = f32::NEG_INFINITY;
+            for vertex in painter.triangles.iter().filter(|v| v.pos[1] == row_y) {
+                left = left.min(vertex.pos[0]);
+                right = right.max(vertex.pos[0]);
+            }
+            span = span.max(right - left);
+        }
+        assert!(span > 100.0, "the zero baseline spans the plot");
+    }
+
+    #[test]
+    fn the_newest_mean_reads_beside_the_title_clear_of_the_curve() {
+        // The mean is rising and the corner it ends in is the top of the plot,
+        // which is exactly where the reading used to be printed over the curve.
+        let history: Vec<GenerationStats> = (1..=30)
+            .map(|generation| stats(generation, 0.01 * f64::from(generation), 0, 1))
+            .collect();
+        let mut painter = Painter::new();
+        draw_chart(&mut painter, chart_rect(), &history);
+        let readout: Vec<&crate::painter::TextItem> = painter
+            .text
+            .iter()
+            .filter(|item| item.content == "0.30")
+            .collect();
+        assert_eq!(readout.len(), 1, "the newest mean is printed once");
+        let readout = readout[0];
+        assert_eq!(readout.color, color::TEXT, "a reading, not more curve ink");
+        assert!(
+            readout.pos[1] <= chart_rect().y + PANEL_PAD + TITLE_H,
+            "the reading stands in the title row, clear of the plot"
+        );
+        // The plot still carries the mean in its own ink.
+        assert!(painter
+            .triangles
+            .iter()
+            .any(|vertex| vertex.color == color::BEST.to_linear()));
+    }
+
+    #[test]
+    fn the_chart_draws_the_spread_it_was_given() {
+        // Triangles drawn in the band's ink, which only the ribbon and its
+        // legend swatch use.
+        let banded = |history: &[GenerationStats]| {
+            let mut painter = Painter::new();
+            draw_chart(&mut painter, chart_rect(), history);
+            painter
+                .triangles
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter(|triangle| triangle[0].color == color::BAND.to_linear())
+                .count()
+        };
+        // Every Generation has cleared nothing while the tail has reached a
+        // Wave: the ribbon is drawn along the whole run, column by column.
+        let spread: Vec<GenerationStats> = (1..=20)
+            .map(|generation| stats(generation, 0.01 * f64::from(generation), 0, 1))
+            .collect();
+        // A Population whose middle and tail are both at zero Waves has no
+        // spread, and gets no ribbon: only the legend's own swatch is left.
+        let flat: Vec<GenerationStats> = (1..=20)
+            .map(|generation| stats(generation, 0.01 * f64::from(generation), 0, 0))
+            .collect();
+        let (spread_ink, flat_ink) = (banded(&spread), banded(&flat));
+        assert!(
+            spread_ink >= 20,
+            "the ribbon is drawn, column by column ({spread_ink})"
+        );
+        assert!(
+            flat_ink <= 2,
+            "no spread, no ribbon: the legend's swatch only ({flat_ink})"
+        );
     }
 
     #[test]

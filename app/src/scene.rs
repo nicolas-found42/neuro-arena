@@ -48,12 +48,30 @@ const H: f32 = arena::HEIGHT as f32;
 pub struct ArenaView {
     pub origin: [f32; 2],
     pub scale: f32,
+    /// The displacement the Arena is drawn with, in Arena units, published by
+    /// the effects pass when the field is hit. Zero until then — a golden
+    /// frame, a probe and a paused frame are still.
+    pub tremor: [f32; 2],
 }
 
 impl ArenaView {
     /// The transform the Painter needs to map logical Arena units into the window.
+    ///
+    /// The view's `tremor` is folded in here — an offset of a few Arena units,
+    /// published by the effects pass when the field is hit — because this is
+    /// the one place the Arena's transform is built: every layer that lives in
+    /// Arena space, the field's own geometry, the trail and the light over it,
+    /// takes the shake together, and nothing outside it does. It is scaled
+    /// like the rest of the Arena, so a jolt is the same fraction of the field
+    /// at every window size.
     pub fn transform(&self) -> Transform {
-        Transform::new(self.scale, self.origin)
+        Transform::new(
+            self.scale,
+            [
+                self.origin[0] + self.tremor[0] * self.scale,
+                self.origin[1] + self.tremor[1] * self.scale,
+            ],
+        )
     }
 
     /// The Arena's outer rectangle in window pixels: `x, y, width, height`.
@@ -234,6 +252,12 @@ fn seam_copies(
 
 // ------------------------------------------------------------------- frame
 
+/// Draw the field: its sky, its measure, its edge, the entities and the
+/// tracking overlay, all in the Arena's own 960×600 units.
+///
+/// The Painter is expected to be in window units when this is called — that is
+/// the scale the readings anchored in the field are measured against — and it
+/// is left that way.
 pub fn draw_arena(
     painter: &mut Painter,
     world: &World,
@@ -241,43 +265,52 @@ pub fn draw_arena(
     show_rays: bool,
     motion: bool,
 ) {
-    painter.set_transform(view.transform());
+    // The window's scale, which the Arena's transform is about to replace:
+    // what an Arena unit is worth in window units is the ratio between them.
+    let window_scale = painter.transform().scale;
+    let fit = if window_scale > 0.0 {
+        view.scale / window_scale
+    } else {
+        view.scale
+    };
+    // Everything below is in the field's own space, and the scope puts the
+    // Painter back the way it found it: entering the Arena is one call, and so
+    // is leaving it.
+    painter.arena_scope(view.transform(), [0.0, 0.0, W, H], |painter| {
+        // The wash, the nebulae and the frame's falloff are already on the target:
+        // the backdrop shader painted them before any of this was submitted. What
+        // is left is what sits *in* the field — its sky, its measure, its edge.
+        draw_stars(painter);
+        draw_grid(painter);
+        draw_field_edge(painter);
 
-    painter.set_clip(Some([0.0, 0.0, W, H]));
-    // The wash, the nebulae and the frame's falloff are already on the target:
-    // the backdrop shader painted them before any of this was submitted. What
-    // is left is what sits *in* the field — its sky, its measure, its edge.
-    draw_stars(painter);
-    draw_grid(painter);
-    draw_field_edge(painter);
-
-    let agent = &world.agent;
-    // The rays go down first: they are translucent, and reading them through
-    // the asteroids is the point of the overlay.
-    if show_rays && world.time > 0.0 {
-        draw_rays(painter, &agent.ship, &agent.inputs);
-    }
-    draw_asteroids(painter, &world.asteroids);
-    draw_bullets(painter, &world.bullets);
-    draw_ship(
-        painter,
-        &agent.ship,
-        agent.alive,
-        agent.thrusting,
-        world.time,
-        motion,
-    );
-    // What the Agent senses and what it asks for, worn on the hull. Both come
-    // from the step the World has already taken, so a paused frame shows the
-    // reading the Network was actually given and the request it actually made.
-    if agent.alive && world.time > 0.0 {
-        draw_corona(painter, &agent.ship, &agent.inputs);
-        if let Some(network) = agent.network() {
-            draw_intent(painter, &agent.ship, network);
+        let agent = &world.agent;
+        // The rays go down first: they are translucent, and reading them through
+        // the asteroids is the point of the overlay.
+        if show_rays && world.time > 0.0 {
+            draw_rays(painter, &agent.ship, &agent.inputs);
         }
-    }
-    draw_tracking(painter, world);
-    painter.set_clip(None);
+        draw_asteroids(painter, &world.asteroids);
+        draw_bullets(painter, &world.bullets);
+        draw_ship(
+            painter,
+            &agent.ship,
+            agent.alive,
+            agent.thrusting,
+            world.time,
+            motion,
+        );
+        // What the Agent senses and what it asks for, worn on the hull. Both come
+        // from the step the World has already taken, so a paused frame shows the
+        // reading the Network was actually given and the request it actually made.
+        if agent.alive && world.time > 0.0 {
+            draw_corona(painter, &agent.ship, &agent.inputs);
+            if let Some(network) = agent.network() {
+                draw_intent(painter, &agent.ship, network);
+            }
+        }
+        draw_tracking(painter, world, fit);
+    });
 }
 
 fn draw_grid(painter: &mut Painter) {
@@ -1088,8 +1121,45 @@ fn draw_intent(painter: &mut Painter, ship: &Ship, network: &sim::Network) {
 /// ring, which reaches `INTENT_RADIUS` Ship radii.
 const CHEVRON_REACH: f32 = 62.0;
 
+/// The sizes the tracking overlay's readings are set in — the ruler numbers and
+/// the two readout lines.
+const RULER_SIZE: f32 = 8.0;
+const READOUT_SIZE: f32 = 9.0;
+
+/// The smallest a reading is drawn at, in the window units the chrome is laid
+/// out in: the type is anchored in the field but read in the window, and a
+/// reading below this stops being a reading. Window units, not device pixels,
+/// so the same window shows the same size at 1× and on a retina display.
+const READOUT_MIN: f32 = 9.5;
+
+/// How much larger than authored an Arena-space reading is allowed to grow as
+/// the field is magnified: the type holds its size, and a big window does not
+/// need its rulers to grow without limit.
+const READOUT_HEADROOM: f32 = 2.0;
+
+/// The size to hand the Painter for text anchored in Arena space, where `fit`
+/// is how many window units one Arena unit covers.
+///
+/// The Painter multiplies a text size by the transform's scale, so a ruler
+/// label set at eight would be four window pixels on a half-size field and
+/// sixteen on a doubled one — neither of which is the size it was set at. The
+/// fit is divided back out, which is what makes the reading hold its window
+/// size: floored, so a shrunken field is still labelled legibly, and capped at
+/// twice what was authored, so the rulers do not become headlines. Only the
+/// type stops scaling; the anchor still travels with the field.
+fn arena_text(fit: f32, size: f32) -> f32 {
+    if fit <= 0.0 {
+        return size;
+    }
+    (size * fit).max(READOUT_MIN).min(size * READOUT_HEADROOM) / fit
+}
+
 /// A geometric navigation overlay, independent of the Network's sampled inputs.
-fn draw_tracking(p: &mut Painter, world: &World) {
+///
+/// `fit` is how many window units an Arena unit covers — the Arena's scale with
+/// the display's own scale taken back out — which is what the overlay's
+/// readings are set in rather than the field's units.
+fn draw_tracking(p: &mut Painter, world: &World, fit: f32) {
     use crate::painter::Align;
     let ship = &world.agent.ship;
     let speed = ship.vx.hypot(ship.vy) as f32;
@@ -1117,6 +1187,7 @@ fn draw_tracking(p: &mut Painter, world: &World) {
         });
     }
     // Edge rulers make the fixed coordinate system and seam readable.
+    let ruler = arena_text(fit, RULER_SIZE);
     for x in (120..960).step_by(120) {
         p.stroke(
             [x as f32, 3.0],
@@ -1126,7 +1197,7 @@ fn draw_tracking(p: &mut Painter, world: &World) {
         );
         p.text_aligned(
             [x as f32, 12.0],
-            8.0,
+            ruler,
             theme::color::TEXT_DIM.alpha(0.55),
             Align::Center,
             format!("{x:03}"),
@@ -1160,14 +1231,14 @@ fn draw_tracking(p: &mut Painter, world: &World) {
         // Keep labels in a fixed HUD lane, never over moving Asteroids.
         p.text(
             [16.0, H - 24.0],
-            9.0,
+            arena_text(fit, READOUT_SIZE),
             ink,
             format!("NEAREST HULL  {clearance:05.1}u"),
         );
     }
     p.text_aligned(
         [W - 16.0, H - 24.0],
-        9.0,
+        arena_text(fit, READOUT_SIZE),
         theme::color::TEXT_DIM,
         Align::Right,
         format!("V {speed:05.1}u/s   T {:05.1}s", world.time),
@@ -1352,6 +1423,7 @@ mod tests {
         let view = ArenaView {
             origin: [0.0, 0.0],
             scale: 1.0,
+            tremor: [0.0, 0.0],
         };
 
         // Nothing sensed: nine ticks mark the slots, and no wedge claims a
@@ -1424,6 +1496,7 @@ mod tests {
         let view = ArenaView {
             origin: [0.0, 0.0],
             scale: 1.0,
+            tremor: [0.0, 0.0],
         };
         // A Ship on the right edge wears its corona on both sides of the seam,
         // the same way its hull is drawn on both sides.
@@ -1454,6 +1527,7 @@ mod tests {
         let view = ArenaView {
             origin: [0.0, 0.0],
             scale: 1.0,
+            tremor: [0.0, 0.0],
         };
         let mut p = Painter::new();
         p.set_transform(view.transform());
@@ -1487,6 +1561,7 @@ mod tests {
         let view = ArenaView {
             origin: [0.0, 0.0],
             scale: 1.0,
+            tremor: [0.0, 0.0],
         };
         let quiet = posed(480.0, 300.0, &[]);
         let mut p = Painter::new();
@@ -1533,5 +1608,179 @@ mod tests {
                 "a sparkle crosses the empty floor at {FLOOR:?}"
             );
         }
+    }
+
+    #[test]
+    fn arena_space_readings_hold_their_window_size_at_any_scale() {
+        // The Painter scales a text size by the transform, so what it is handed
+        // is not what the window shows. These are the two sizes the tracking
+        // overlay sets, read at a half-size field, its own size, a doubled one,
+        // and at a half-size field on a retina display — where the window is
+        // drawn at twice the device scale and the reading has to hold the size
+        // a reader sees, not the one the backbuffer holds.
+        for base in [RULER_SIZE, READOUT_SIZE] {
+            for (fit, device) in [(0.5, 1.0), (1.0, 1.0), (2.0, 1.0), (0.507, 2.0)] {
+                let mut p = Painter::new();
+                p.set_transform(Transform::new(fit * device, [10.0, 20.0]));
+                p.text(
+                    [0.0, 0.0],
+                    arena_text(fit, base),
+                    Rgba::rgb(1.0, 1.0, 1.0),
+                    "120",
+                );
+                let shown = p.text[0].size / device;
+                assert!(
+                    shown >= READOUT_MIN - 1e-4,
+                    "with a fit of {fit} at {device}× a reading is {shown}, which is not legible"
+                );
+                assert!(
+                    shown <= base * READOUT_HEADROOM + 1e-4,
+                    "with a fit of {fit} a reading is {shown}, past twice the {base} it was set at"
+                );
+                if fit <= 1.0 {
+                    assert!(
+                        (9.0..=10.0).contains(&shown),
+                        "with a fit of {fit} a reading shows at {shown}, not a floor of 9–10"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_readings_stay_on_their_subjects_at_every_field_scale() {
+        let world = posed(480.0, 300.0, &[]);
+        for (scale, origin) in [(0.5_f32, [17.0_f32, 71.0_f32]), (2.0, [3.0, 5.0])] {
+            let view = ArenaView {
+                origin,
+                scale,
+                tremor: [0.0, 0.0],
+            };
+            let mut p = Painter::new();
+            p.set_transform(Transform::new(1.0, [0.0, 0.0]));
+            draw_arena(&mut p, &world, view, false, true);
+
+            // The ruler number is anchored to its own tick, in Arena units, at
+            // every scale: only the type stopped scaling.
+            let transform = view.transform();
+            let ruler = p
+                .text
+                .iter()
+                .find(|item| item.content == "120")
+                .expect("the 120 ruler is drawn");
+            let expected = transform.apply([120.0, 12.0]);
+            assert!((ruler.pos[0] - expected[0]).abs() < 1e-3);
+            assert!((ruler.pos[1] - expected[1]).abs() < 1e-3);
+            assert!(
+                (ruler.size - RULER_SIZE * scale.clamp(READOUT_MIN / RULER_SIZE, 2.0)).abs() < 1e-3
+            );
+
+            // As is the V/T readout, in its own lane against the field's edge.
+            let readout = p
+                .text
+                .iter()
+                .find(|item| item.content.starts_with("V "))
+                .expect("the velocity readout is drawn");
+            let expected = transform.apply([W - 16.0, H - 24.0]);
+            assert!((readout.pos[0] - expected[0]).abs() < 1e-3);
+            assert!((readout.pos[1] - expected[1]).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn drawing_the_arena_leaves_the_painter_as_it_found_it() {
+        let world = posed(480.0, 300.0, &[]);
+        let mut p = Painter::new();
+        let chrome = Transform::new(2.0, [31.0, 9.0]);
+        p.set_transform(chrome);
+        draw_arena(
+            &mut p,
+            &world,
+            ArenaView {
+                origin: [4.0, 6.0],
+                scale: 1.5,
+                tremor: [0.0, 0.0],
+            },
+            true,
+            true,
+        );
+        // The chrome that follows is drawn in the window, not in the field: a
+        // caller cannot walk away wearing the Arena's transform.
+        assert_eq!(p.transform(), chrome);
+        assert!(!p.triangles.is_empty());
+        // And the field really was drawn in the field's space: every vertex is
+        // inside the Arena's rect in the window.
+        assert!(p
+            .triangles
+            .iter()
+            .all(|v| (4.0..=4.0 + 960.0 * 1.5).contains(&v.pos[0])
+                && (6.0..=6.0 + 600.0 * 1.5).contains(&v.pos[1])));
+    }
+
+    #[test]
+    fn the_present_tremor_moves_the_field_and_nothing_else() {
+        let view = ArenaView {
+            origin: [40.0, 60.0],
+            scale: 1.5,
+            tremor: [0.0, 0.0],
+        };
+        let shaken = ArenaView {
+            tremor: [2.0, -1.0],
+            ..view
+        }
+        .transform();
+        let still = view.transform();
+
+        // The offset is in Arena units, so it arrives in the window scaled like
+        // everything else the field is made of.
+        assert_eq!(shaken.scale, still.scale);
+        assert!((shaken.offset[0] - still.offset[0] - 3.0).abs() < 1e-6);
+        assert!((shaken.offset[1] - still.offset[1] + 1.5).abs() < 1e-6);
+        assert_eq!(shaken.offset, [43.0, 58.5]);
+
+        // But the view itself does not: the field's rect is what the backdrop
+        // and the instrument strip are placed from, and neither shakes.
+        assert_eq!(view.rect(), (40.0, 60.0, W * 1.5, H * 1.5));
+        assert_eq!(
+            view,
+            ArenaView {
+                origin: [40.0, 60.0],
+                scale: 1.5,
+                tremor: [0.0, 0.0],
+            }
+        );
+    }
+
+    #[test]
+    fn seam_copies_hold_while_the_field_is_shaken() {
+        // The Ship on the left seam, and the field struck: the offset is on the
+        // transform, so the copy across the seam is the same shape in the same
+        // place relative to the field, and the wrap still reads.
+        let tremor = [4.0, -3.0];
+        let world = posed(4.0, 300.0, &[]);
+        let view = ArenaView {
+            origin: [10.0, 20.0],
+            scale: 1.0,
+            tremor,
+        };
+        let mut p = Painter::new();
+        draw_arena(&mut p, &world, view, false, true);
+
+        // The field is drawn where the shake put it, clipped to the shaken
+        // rect: nothing hangs outside it.
+        let left = view.origin[0] + tremor[0];
+        let top = view.origin[1] + tremor[1];
+        assert!(p
+            .triangles
+            .iter()
+            .chain(p.luminous.iter())
+            .all(|v| v.pos[0] >= left - 1e-3
+                && v.pos[0] <= left + W + 1e-3
+                && v.pos[1] >= top - 1e-3
+                && v.pos[1] <= top + H + 1e-3));
+        // And the hull is on both edges of the field at once, which is what a
+        // Seam Copy is.
+        assert!(p.triangles.iter().any(|v| v.pos[0] < left + 20.0));
+        assert!(p.triangles.iter().any(|v| v.pos[0] > left + W - 8.0));
     }
 }

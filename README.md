@@ -91,10 +91,12 @@ pulses along the containment seam, and the watched Ship's luminous trail.
 Nothing the interface prints can bloom, which is what keeps the panels and the
 text sharp without a mask (ADR 0011).
 
-See the [luminous field report](docs/research/luminous-field.md) for this pass's
-captures, research chain, and evidence; the
-[deep-field observatory report](docs/research/deep-field-observatory.md) and the
-[native visual audit](docs/research/native-visual-upgrade.md) record the passes
+See the [luminous field report](docs/research/luminous-field.md) for the HDR pass's
+captures and evidence, and the
+[observatory, legible report](docs/research/observatory-next.md) for the pass that gave
+the Chart its axis and band, the bench its minimum-window legs, and the frame its idle
+light; the [deep-field observatory report](docs/research/deep-field-observatory.md) and
+the [native visual audit](docs/research/native-visual-upgrade.md) record the passes
 beneath it.
 
 ## Seeds and reproducibility

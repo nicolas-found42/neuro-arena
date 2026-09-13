@@ -244,20 +244,72 @@ fn fs_bloom_up(in: FullscreenOut) -> @location(0) vec4<f32> {
 
 // --------------------------------------------------------------- composite
 
-/// A repeatable hash in `0..1` from a pixel coordinate. The grain it feeds is
-/// static — it is the instrument's own sensor noise, not an animation — so a
-/// paused frame is perfectly still and two captures of one frame are identical.
-fn hash21(p: vec2<f32>) -> f32 {
-    let q = fract(p * vec2<f32>(0.1031, 0.1030));
-    let r = q + dot(q, q.yx + 33.33);
-    return fract((r.x + r.y) * r.x);
+// The bloom term is resolved before it reaches the scene, not merely added to
+// it. Raw addition is wrong at the top of the range: the brightest channels
+// clip first, so the core of a bright light — the one place its colour carries
+// the most meaning — washes out toward white while the halo around it keeps
+// the hue. The curve below compresses the top end and leaves the hue angle
+// alone: PBR Neutral, the Khronos Group's fit (Apache-2.0,
+// https://github.com/KhronosGroup/ToneMapping), as adapted in Bevy v0.19.1
+// `crates/bevy_core_pipeline/src/tonemapping/tonemapping_shared.wgsl` (MIT OR
+// Apache-2.0).
+//
+// The scene is *not* tone-mapped, and neither is anything the interface
+// printed: panel fills, text and chart lines are authored at or below white
+// and must resolve to exactly what was written (and they cannot bloom — the
+// threshold sits at white). Only the light the chain gathered is resolved.
+//
+// `K_s` and `K_d` in the specification; the only input is the colour, so the
+// composite stays a pure function of the frame.
+const RESOLVE_START_COMPRESSION: f32 = 0.8 - 0.04;
+const RESOLVE_DESATURATION: f32 = 0.15;
+
+/// PBR Neutral's highlight compression, and only that: below
+/// [`RESOLVE_START_COMPRESSION`] the colour passes through untouched, above it
+/// the peak asymptotes toward `1.0` and every channel is scaled by the same
+/// factor — so the ratios between them, and with them the hue, survive the
+/// compression. Only the very top desaturates toward white.
+///
+/// The fit's low-end toe is deliberately not here. It takes back up to 0.04 per
+/// channel wherever the darkest channel is under 0.08, which is the right trade
+/// for a whole image — near-black scene values must not be lifted — but wrong
+/// for a light term measured against a dark field: it swallows the halo's tail
+/// (measured: the halo of a bullet — a light at seven times white — no longer
+/// cleared the field's own grain with it in place) and leans the tail's colour
+/// red, which is the opposite of what this pass is for. What remains is exactly
+/// what the composite needs: identity through the halo, compression in the core.
+fn resolve_bloom(color: vec3<f32>) -> vec3<f32> {
+    let peak = max(color.r, max(color.g, color.b));
+    if peak < RESOLVE_START_COMPRESSION {
+        return color;
+    }
+
+    // `p_n` and `g` in the specification, with `1 - K_s` named `range`.
+    let range = 1.0 - RESOLVE_START_COMPRESSION;
+    let compressed = 1.0 - range * range / (peak + range - RESOLVE_START_COMPRESSION);
+    let desaturate = 1.0 - 1.0 / (RESOLVE_DESATURATION * (peak - compressed) + 1.0);
+    return mix(color * (compressed / peak), vec3<f32>(compressed), desaturate);
+}
+
+/// Interleaved gradient noise in `0..1` from a pixel coordinate — the pattern
+/// Jorge Jimenez described in "Next Generation Post Processing in Call of Duty:
+/// Advanced Warfare" (SIGGRAPH 2014) and that Filament (Apache-2.0) and
+/// PlayCanvas (MIT) both ship. It sits flatter than white noise over a small
+/// patch — a low-discrepancy sequence, so the field keeps a steadier average —
+/// which is what makes it read as grain on glass rather than as static.
+///
+/// It is a function of the pixel and nothing else: no clock, no frame index,
+/// so a paused frame is perfectly still and two captures of one frame are
+/// identical.
+fn interleaved_gradient(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
 }
 
 @fragment
 fn fs_composite(in: FullscreenOut) -> @location(0) vec4<f32> {
     let scene = textureSample(source, source_sampler, in.uv).rgb;
     let bloom = textureSample(bloom_source, source_sampler, in.uv).rgb;
-    var color = scene + bloom * frame.params.y;
+    var color = scene + resolve_bloom(bloom * frame.params.y);
 
     // Sensor grain, inside the Arena only: the panels are printed matter and
     // stay clean, while the field reads as something being *looked at*.
@@ -268,7 +320,7 @@ fn fs_composite(in: FullscreenOut) -> @location(0) vec4<f32> {
     // Multiplicative, not additive: a constant offset in linear light is
     // enormous against a field this dark, and would read as dither rather than
     // as the instrument's own noise.
-    let grain = 1.0 + (hash21(floor(pixel)) - 0.5) * frame.params.z * inside;
+    let grain = 1.0 + (interleaved_gradient(floor(pixel)) - 0.5) * frame.params.z * inside;
     color *= grain;
 
     return vec4<f32>(max(color, vec3<f32>(0.0)), 1.0);

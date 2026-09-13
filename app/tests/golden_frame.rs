@@ -146,6 +146,7 @@ fn render(world: &World, show_rays: bool) -> Frame {
         ArenaView {
             origin: [0.0, 0.0],
             scale: 1.0,
+            tremor: [0.0, 0.0],
         },
         show_rays,
         show_rays,
@@ -257,8 +258,9 @@ fn the_ship_asteroids_and_bullets_land_where_the_simulation_puts_them() {
     assert!(ship_pixels > 20, "the Ship is drawn: {ship_pixels} pixels");
 
     // An Asteroid: the Large asteroid at (700, 160) is drawn in the asteroid grey, which
-    // is brighter than the empty floor everywhere around it.
-    let floor = frame.pixel(475, 20);
+    // is brighter than the empty floor everywhere around it. The floor sample sits at
+    // y = 40: below the top-edge rulers, whose 9.5 px floor keeps their glyphs off it.
+    let floor = frame.pixel(475, 40);
     let asteroid = frame.pixel(700, 160);
     assert!(
         asteroid[0] > floor[0] + 20 && asteroid[1] > floor[1] + 20,

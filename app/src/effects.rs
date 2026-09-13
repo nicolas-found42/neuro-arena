@@ -7,8 +7,15 @@
 //! - a cleared Wave pulses the four Arena edges, the seam the field wraps on;
 //! - the Ship's death scatters embers where it died.
 //!
+//! And one that is not light: an Impact also jolts the whole field. The Arena
+//! carries a bounded trauma that decays on the simulation clock, squared into a
+//! displacement no larger than [`SHAKE_AMPLITUDE`], which the app reads from
+//! [`Effects::shake`] and carries on the Arena's transform.
+//! The chrome is outside that transform, so the instruments never move.
+//!
 //! Events age on `World::time`, so they freeze with a pause and a replay draws
-//! the frame it drew the first time. Reduced motion clears them entirely.
+//! the frame it drew the first time. Reduced motion clears them entirely, the
+//! tremor included.
 
 use crate::{
     painter::{Painter, Rgba},
@@ -45,6 +52,32 @@ const STREAK_MAX: f32 = 16.0;
 const STREAK_BASE: f32 = 1.4;
 const STREAK_TIP: f32 = 0.4;
 
+/// The trauma one Impact leaves, and one Ship's death, and how fast it bleeds
+/// away. The level is bounded at one by construction, and it is squared before
+/// it becomes a displacement, so a light hit is a nudge — a rock is about a
+/// pixel at 1×, the Ship's death about four — and sustained fire saturates at
+/// the cap. A second of simulation time takes 0.8 off the level.
+const TRAUMA_PER_IMPACT: f32 = 0.45;
+const TRAUMA_PER_DEATH: f32 = 0.85;
+const TRAUMA_DECAY: f32 = 0.8;
+
+/// The most the tremor moves the field, in Arena units — six of the 960×600
+/// field's units, which is six window pixels at 1× and the same fraction of the
+/// field at any other scale, because the offset is carried by the Arena's
+/// transform. It is a jolt, never a lurch.
+const SHAKE_AMPLITUDE: f32 = 6.0;
+
+/// How long the tremor holds one direction before the hash draws another, in
+/// simulation steps: a held direction reads as the field being struck, where a
+/// fresh one every frame reads as static. Three steps is a twentieth of a
+/// second.
+const SHAKE_STEPS: u64 = 3;
+
+/// One over the square root of two: the tremor's two axes come from one hash
+/// pair, and this is what bounds their magnitude to [`SHAKE_AMPLITUDE`] rather
+/// than to its diagonal.
+const SHAKE_DIAGONAL: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
 #[derive(Default)]
 pub struct Effects {
     key: Option<(u32, usize)>,
@@ -56,14 +89,36 @@ pub struct Effects {
     /// Whether the Ship was alive at the last observation; true→false scatters.
     alive: Option<bool>,
     bursts: VecDeque<(f64, [f64; 2])>,
+    /// How hard the field has been hit, in `0..=1`, on the simulation clock.
+    trauma: f32,
 }
 impl Effects {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
 
+    /// How hard the field has been hit: raised by impacts, falling by
+    /// [`TRAUMA_DECAY`] a second of simulation time, bounded at one.
+    pub fn trauma(&self) -> f32 {
+        self.trauma
+    }
+
+    /// The Arena's displacement this frame, in Arena units.
+    pub fn shake(&self) -> [f32; 2] {
+        shake(self.trauma, self.time)
+    }
+
     /// Called after watched steps; never steps or mutates the World itself.
+    ///
+    /// The frame's arena has already been drawn by the time an Episode is
+    /// observed, so the app reads [`Effects::shake`] after this and draws the
+    /// next frame with it; while a pause holds the clock, it is the same
+    /// offset.
     pub fn observe(&mut self, key: (u32, usize), w: &World, enabled: bool) {
+        self.advance(key, w, enabled);
+    }
+
+    fn advance(&mut self, key: (u32, usize), w: &World, enabled: bool) {
         if !enabled {
             self.clear();
             return;
@@ -74,11 +129,18 @@ impl Effects {
             self.bursts.clear();
             self.wave = None;
             self.alive = None;
+            // A different Episode is a different field: the tremor starts still.
+            self.trauma = 0.0;
             self.time = -1.0;
             self.key = Some(key);
         }
         if w.time == self.time {
             return;
+        }
+        // The tremor ages with the steps that were run, and the first look at
+        // an Episode has no step behind it to age from.
+        if self.time >= 0.0 {
+            self.trauma = (self.trauma - TRAUMA_DECAY * (w.time - self.time) as f32).max(0.0);
         }
         self.time = w.time;
         while self
@@ -101,6 +163,7 @@ impl Effects {
         self.detect_wave(w);
         self.detect_death(w);
         for impact in w.impacts() {
+            self.trauma = (self.trauma + TRAUMA_PER_IMPACT).min(1.0);
             if self.echoes.len() == CAPACITY {
                 self.echoes.pop_front();
             }
@@ -122,11 +185,13 @@ impl Effects {
         self.wave = Some(w.wave);
     }
 
-    /// A live Ship that stops being alive scatters embers where it died. The
-    /// first look records the flag without firing, for the same reason.
+    /// A live Ship that stops being alive scatters embers where it died, and
+    /// jolts the field harder than a rock does. The first look records the flag
+    /// without firing, for the same reason.
     fn detect_death(&mut self, w: &World) {
         let was_alive = self.alive.unwrap_or(w.agent.alive);
         if was_alive && !w.agent.alive {
+            self.trauma = (self.trauma + TRAUMA_PER_DEATH).min(1.0);
             if self.bursts.len() == DEATH_CAP {
                 self.bursts.pop_front();
             }
@@ -315,6 +380,31 @@ fn seam_copies(p: &mut Painter, at: [f32; 2], reach: f32, draw: impl Fn(&mut Pai
     }
 }
 
+/// The Arena's displacement, in Arena units, for a trauma level and a moment in
+/// simulation time.
+///
+/// Trauma is squared, so the level reads as severity rather than as an amount;
+/// the direction comes from the event's own discipline — integer arithmetic on
+/// the clock quantized to simulation steps, no library RNG, no `sin`/`cos` —
+/// held for [`SHAKE_STEPS`] steps at a time so the field moves as one piece
+/// instead of buzzing. A frame that observes nothing publishes the same offset,
+/// which is what makes a paused frame pixel-identical.
+fn shake(level: f32, time: f64) -> [f32; 2] {
+    let level = level.clamp(0.0, 1.0);
+    if level <= 0.0 || !time.is_finite() || time < 0.0 {
+        return [0.0, 0.0];
+    }
+    let amplitude = SHAKE_AMPLITUDE * level * level;
+    let step = (time / sim::DT).round() as u64 / SHAKE_STEPS;
+    let mut seed = (step ^ (step >> 32)) as u32;
+    let x = lcg_unit(&mut seed) * 2.0 - 1.0;
+    let y = lcg_unit(&mut seed) * 2.0 - 1.0;
+    [
+        x * SHAKE_DIAGONAL * amplitude,
+        y * SHAKE_DIAGONAL * amplitude,
+    ]
+}
+
 /// The seed for one event's radiating pattern: its identity quantized into
 /// integers — position to 1/64 Arena unit, birth to a simulation step — and
 /// folded together. Integer arithmetic only, so the same event draws the same
@@ -396,6 +486,7 @@ mod tests {
             ArenaView {
                 origin: [0.0, 0.0],
                 scale: 1.0,
+                tremor: [0.0, 0.0],
             },
         );
         assert!(p
@@ -502,6 +593,7 @@ mod tests {
             ArenaView {
                 origin: [0.0, 0.0],
                 scale: 1.0,
+                tremor: [0.0, 0.0],
             },
         );
         assert!(p.triangles.is_empty());
@@ -562,6 +654,7 @@ mod tests {
             ArenaView {
                 origin: [0.0, 0.0],
                 scale: 1.0,
+                tremor: [0.0, 0.0],
             },
         );
         assert!(p.is_empty());
@@ -580,6 +673,7 @@ mod tests {
             ArenaView {
                 origin: [0.0, 0.0],
                 scale: 1.0,
+                tremor: [0.0, 0.0],
             },
         );
         assert!(p.triangles.is_empty());
@@ -615,6 +709,7 @@ mod tests {
         let view = ArenaView {
             origin: [0.0, 0.0],
             scale: 1.0,
+            tremor: [0.0, 0.0],
         };
         let (mut a, mut b) = (Painter::new(), Painter::new());
         e.draw(&mut a, view);
@@ -631,5 +726,195 @@ mod tests {
         assert_ne!(a, spark_seed(321.5, 200.25, 3.0 + sim::DT));
         assert_ne!(a, spark_seed(321.51, 200.25, 3.0));
         assert_ne!(a, spark_seed(321.5, 200.26, 3.0));
+    }
+
+    /// A World with one bullet about to strike one rock, well clear of the
+    /// Ship, so a step produces exactly one Impact.
+    fn strike(w: &mut World, rng: &mut sim::Rng) {
+        w.agent.ship.x = 100.0;
+        w.agent.ship.y = 100.0;
+        w.asteroids.clear();
+        w.asteroids.push(sim::Asteroid::new(
+            sim::config::asteroid::Size::Large,
+            500.0,
+            500.0,
+            0.0,
+            0.0,
+            rng,
+        ));
+        w.bullets.clear();
+        w.bullets.push(sim::Bullet {
+            x: 500.0,
+            y: 500.0,
+            vx: 0.0,
+            vy: 0.0,
+            life: 1.0,
+        });
+        w.step_fixed();
+    }
+
+    /// One step with nothing to hit, so the last step's Impacts are cleared.
+    fn quiet_step(w: &mut World) {
+        w.asteroids.clear();
+        w.bullets.clear();
+        w.step_fixed();
+    }
+
+    #[test]
+    fn trauma_rises_by_an_impact_and_falls_at_the_rate_it_is_given() {
+        let mut w = World::new(sim::Rng::from_seed(1), None);
+        let mut rng = sim::Rng::from_seed(2);
+        let mut e = Effects::default();
+        let mut clock = 1.0;
+        w.time = clock;
+        // The first look at an Episode is not a hit.
+        e.observe((1, 0), &w, true);
+        assert_eq!(e.trauma(), 0.0);
+
+        // One struck rock: one Impact's worth. The level was at nothing, so
+        // there was nothing for the step to take off it.
+        strike(&mut w, &mut rng);
+        clock += sim::DT;
+        w.time = clock;
+        e.observe((1, 0), &w, true);
+        assert!(
+            (e.trauma() - TRAUMA_PER_IMPACT).abs() < 1e-6,
+            "{}",
+            e.trauma()
+        );
+
+        // Then nothing: the level bleeds away by TRAUMA_DECAY a simulation
+        // second. This is a rate, not a per-frame easing, so a quarter of a
+        // second takes a quarter of a second's worth off — and the clock it
+        // reads is the simulation's, which is what makes a pause hold.
+        quiet_step(&mut w);
+        clock += 0.25;
+        w.time = clock;
+        e.observe((1, 0), &w, true);
+        let struck = TRAUMA_PER_IMPACT - TRAUMA_DECAY * 0.25;
+        assert!((e.trauma() - struck).abs() < 1e-5, "{}", e.trauma());
+
+        // And eventually the quiet takes it to nothing, never below.
+        let mut left = struck;
+        while left > 0.0 {
+            clock += 0.25;
+            w.time = clock;
+            e.observe((1, 0), &w, true);
+            left = (left - TRAUMA_DECAY * 0.25).max(0.0);
+            assert!((e.trauma() - left).abs() < 1e-5, "{}", e.trauma());
+        }
+        clock += 0.5;
+        w.time = clock;
+        e.observe((1, 0), &w, true);
+        assert_eq!(e.trauma(), 0.0);
+    }
+
+    #[test]
+    fn trauma_saturates_at_one_and_a_new_episode_starts_the_field_still() {
+        let mut w = World::new(sim::Rng::from_seed(1), None);
+        let mut rng = sim::Rng::from_seed(2);
+        let mut e = Effects::default();
+        let mut time = 1.0;
+        w.time = time;
+        e.observe((1, 0), &w, true);
+        for _ in 0..8 {
+            strike(&mut w, &mut rng);
+            time += sim::DT;
+            w.time = time;
+            e.observe((1, 0), &w, true);
+            assert!(e.trauma() <= 1.0);
+        }
+        assert_eq!(e.trauma(), 1.0, "eight strikes do not saturate");
+
+        // A different Episode is a different field, and a restart is a different
+        // Episode: no tremor crosses it.
+        quiet_step(&mut w);
+        w.time += 0.25;
+        e.observe((2, 0), &w, true);
+        assert_eq!(e.trauma(), 0.0);
+        assert_eq!(e.shake(), [0.0, 0.0]);
+
+        // As does clearing the effects outright, which is what the app does on
+        // a restart, a new seed and a load.
+        w.time += 0.25;
+        e.observe((2, 0), &w, true);
+        e.clear();
+        assert_eq!(e.trauma(), 0.0);
+        assert_eq!(e.shake(), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn reduced_motion_leaves_the_field_exactly_where_it_was() {
+        let mut w = World::new(sim::Rng::from_seed(1), None);
+        let mut rng = sim::Rng::from_seed(2);
+        let mut e = Effects::default();
+        w.time = 1.0;
+        e.observe((1, 0), &w, true);
+        strike(&mut w, &mut rng);
+        w.time += sim::DT;
+        e.observe((1, 0), &w, true);
+        assert!(e.trauma() > 0.0);
+        assert_ne!(e.shake(), [0.0, 0.0]);
+
+        // Motion off clears the tremor with the echoes, and the drawing
+        // contract is told to shake by nothing.
+        e.observe((1, 0), &w, false);
+        assert_eq!(e.trauma(), 0.0);
+        assert_eq!(e.shake(), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_held_frame_draws_the_offset_it_was_given() {
+        // A pause runs no steps, so it observes the same instant again: the
+        // level cannot decay and the direction cannot change, which is what
+        // makes a paused frame pixel-identical.
+        let mut w = World::new(sim::Rng::from_seed(1), None);
+        let mut rng = sim::Rng::from_seed(2);
+        let mut e = Effects::default();
+        w.time = 1.0;
+        e.observe((1, 0), &w, true);
+        strike(&mut w, &mut rng);
+        w.time += sim::DT;
+        e.observe((1, 0), &w, true);
+        let held = (e.trauma(), e.shake());
+        for _ in 0..8 {
+            e.observe((1, 0), &w, true);
+        }
+        assert_eq!((e.trauma(), e.shake()), held);
+        e.clear();
+    }
+
+    #[test]
+    fn the_displacement_is_trauma_squared_bounded_and_held() {
+        // Nothing hit, nothing moves — and a clock that never started is not a
+        // clock the hash can read.
+        assert_eq!(shake(0.0, 1.0), [0.0, 0.0]);
+        assert_eq!(shake(0.5, -1.0), [0.0, 0.0]);
+
+        // Half the trauma is a quarter of the displacement: severity, squared.
+        let half = shake(0.5, 1.0);
+        let full = shake(1.0, 1.0);
+        for axis in 0..2 {
+            assert!((half[axis] * 4.0 - full[axis]).abs() < 1e-3);
+        }
+
+        // Bounded by the amplitude at the level's ceiling, however the hash
+        // falls — the cap is a magnitude, not two independent bounds.
+        let mut moved = false;
+        for step in 0..400 {
+            let offset = shake(1.0, step as f64 * sim::DT);
+            assert!(offset[0].hypot(offset[1]) <= SHAKE_AMPLITUDE + 1e-4);
+            moved |= offset != [0.0, 0.0];
+        }
+        assert!(moved, "a saturating hit moved nothing at all");
+
+        // The same moment draws the same offset, and a direction is held for
+        // its steps rather than redrawn every frame.
+        assert_eq!(shake(0.8, 2.0), shake(0.8, 2.0));
+        assert_eq!(shake(0.8, 2.0), shake(0.8, 2.0 + sim::DT));
+        assert_ne!(
+            shake(0.8, 2.0),
+            shake(0.8, 2.0 + SHAKE_STEPS as f64 * sim::DT)
+        );
     }
 }

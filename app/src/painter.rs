@@ -258,6 +258,29 @@ impl Painter {
         });
     }
 
+    /// Draw in a given space and leave the Painter as it was found.
+    ///
+    /// This is the Arena's own space — a transform from logical Arena units
+    /// into the window, and the logical bounds of the field as a clip — and the
+    /// point of it is that entering is one call and leaving is the same call:
+    /// the transform and the clip are put back whatever the body does, so a
+    /// caller cannot walk away with the Painter still wearing the Arena's
+    /// geometry. The gain is not part of the scope: emitters are expected to
+    /// restore it themselves, as they always have.
+    pub fn arena_scope(
+        &mut self,
+        transform: Transform,
+        clip: [f32; 4],
+        draw: impl FnOnce(&mut Painter),
+    ) {
+        let (transform_before, clip_before) = (self.transform, self.clip);
+        self.set_transform(transform);
+        self.set_clip(Some(clip));
+        draw(self);
+        self.transform = transform_before;
+        self.clip = clip_before;
+    }
+
     /// A convex quad, as two triangles.
     pub fn quad(&mut self, a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2], color: Rgba) {
         self.triangle(a, b, c, color);
@@ -635,6 +658,43 @@ fn clip_polygon(points: &[[f32; 2]], rect: [f32; 4]) -> Vec<[f32; 2]> {
         }
     }
     polygon
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn an_arena_scope_puts_the_painter_back_as_it_found_it() {
+        let mut p = Painter::new();
+        let outer = Transform::new(2.0, [31.0, 9.0]);
+        p.set_transform(outer);
+        p.set_clip(Some([10.0, 20.0, 30.0, 40.0]));
+        let outer_clip = p.clip;
+
+        let arena = Transform::new(1.5, [4.0, 6.0]);
+        p.arena_scope(arena, [0.0, 0.0, 960.0, 600.0], |p| {
+            // Inside, the Painter wears the Arena's geometry...
+            assert_eq!(p.transform(), arena);
+            assert_eq!(
+                p.clip,
+                Some([4.0, 6.0, 4.0 + 960.0 * 1.5, 6.0 + 600.0 * 1.5])
+            );
+            p.rect(0.0, 0.0, 960.0, 600.0, Rgba::rgb(1.0, 1.0, 1.0));
+        });
+
+        // ...and afterwards the caller's, whatever the body did with it.
+        assert_eq!(p.transform(), outer);
+        assert_eq!(p.clip, outer_clip);
+        assert!(!p.triangles.is_empty(), "the body drew nothing");
+        // The geometry the body submitted was clipped to the Arena the scope
+        // installed, not to the outer clip it was drawn under.
+        assert!(p
+            .triangles
+            .iter()
+            .all(|v| (4.0..=4.0 + 960.0 * 1.5).contains(&v.pos[0])
+                && (6.0..=6.0 + 600.0 * 1.5).contains(&v.pos[1])));
+    }
 }
 
 #[cfg(test)]

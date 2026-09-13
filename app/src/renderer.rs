@@ -10,7 +10,9 @@
 //!    thresholded 13-tap downsample, then a 3×3 tent upsample that adds each
 //!    level back into the one above it.
 //! 3. **Composite**, into the window's sRGB surface: the scene plus the bloom,
-//!    then the glyphs, which are drawn last and therefore never bloom or blur.
+//!    which is resolved through a hue-preserving curve before it is added, so a
+//!    bright core keeps its colour instead of clipping toward white; then the
+//!    glyphs, which are drawn last and therefore never bloom or blur.
 //!
 //! The threshold sits at white with a soft knee, so nothing the interface is
 //! authored in can bloom: only what the Arena writes *past* white does. That is
@@ -52,7 +54,7 @@ const BLOOM_INTENSITY: f32 = 0.215;
 /// without contouring — without this the nebulae come out as stepped bands. A
 /// multiplicative noise is roughly constant once the target encodes it, so this
 /// works out at about one least-significant bit everywhere, which is exactly
-/// enough to break the steps up. It is a hash of the pixel and not of the
+/// enough to break the steps up. It is a pattern of the pixel and not of the
 /// clock, so a paused frame is perfectly still and two captures of one frame
 /// are identical.
 const GRAIN: f32 = 0.06;

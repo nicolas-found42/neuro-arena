@@ -82,6 +82,40 @@ impl Trail {
     }
 }
 
+/// The instrument strip: the height it is set in, the gap it keeps under the
+/// field, and the narrowest it is ever drawn. The floor exists because the
+/// three sections have to fit at any window size, and a window short enough to
+/// squeeze the field to a sliver still has to show its instruments.
+const STRIP_HEIGHT: f32 = 156.0;
+const STRIP_GAP: f32 = 16.0;
+const STRIP_MIN_WIDTH: f32 = 460.0;
+
+/// The region's own margin: the strip never runs to the edge of the window.
+const REGION_MARGIN: f32 = 32.0;
+
+/// Where the instrument strip sits: under the field it measures and as wide as
+/// the field, rather than across the whole region.
+///
+/// At a wide window the Arena is letterboxed between two bands of empty ground,
+/// and a strip laid out from the region stretches across both of them: the
+/// instruments stop reading as instruments of the thing above them. Laid out
+/// from the Arena's own rect, they attach to the field at every size — and the
+/// tremor the field is drawn with does not move them, because the placement is
+/// the field's, not the frame's.
+fn strip_rect(region: Rect) -> Rect {
+    // Taken at 1:1: the chrome is drawn in the region's own units, and the
+    // Painter's device-pixel transform carries it from there.
+    let (x, y, width, height) = arena_view(region, 1.0).rect();
+    let room = (region.w - REGION_MARGIN).max(0.0);
+    let strip = width.clamp(STRIP_MIN_WIDTH.min(room), room);
+    Rect::new(
+        x + (width - strip) * 0.5,
+        y + height + STRIP_GAP,
+        strip,
+        STRIP_HEIGHT,
+    )
+}
+
 pub fn arena_view(region: Rect, dpr: f32) -> ArenaView {
     let available = Rect::new(
         region.x + 16.0,
@@ -96,6 +130,7 @@ pub fn arena_view(region: Rect, dpr: f32) -> ArenaView {
             (available.y + (available.h - 600.0 * scale) * 0.5) * dpr,
         ],
         scale: scale * dpr,
+        tremor: [0.0, 0.0],
     }
 }
 
@@ -201,12 +236,7 @@ pub fn draw_chrome(
         [region.right() - 20.0, region.y + 62.0],
         color::PANEL_BORDER,
     );
-    let panel = Rect::new(
-        region.x + 16.0,
-        region.bottom() - 172.0,
-        (region.w - 32.0).max(0.0),
-        156.0,
-    );
+    let panel = strip_rect(region);
     crate::instruments::sensorium(p, panel, world, trails);
 }
 
@@ -270,6 +300,61 @@ mod tests {
             assert!((aw / ah - 1.6).abs() < 0.001);
             assert!(x >= 0.0 && y >= 70.0 * dpr);
             assert!(x + aw <= w * dpr && y + ah <= (h - 186.0) * dpr + 0.01);
+        }
+    }
+
+    #[test]
+    fn the_strip_measures_the_field_at_a_wide_and_a_minimum_window() {
+        // 2560×1080 leaves wide letterbox bands beside the field; 900×560 is
+        // the smallest window the app opens, where the field fills the region.
+        for (width, height) in [(2560.0, 1080.0), (900.0, 560.0)] {
+            let region = crate::ui::Layout::new(width, height).arena;
+            let (field_x, field_y, field_w, field_h) = arena_view(region, 1.0).rect();
+            let strip = strip_rect(region);
+
+            // The strip is the field's width and sits under it: at a wide
+            // window the bands beside the field are outside it, which is the
+            // whole point of measuring from the field rather than the region.
+            assert!(
+                (strip.w - field_w).abs() < 1e-3,
+                "at {width}×{height} the strip is {} wide over a {field_w} field",
+                strip.w
+            );
+            assert!(strip.x >= field_x - 1e-3 && strip.right() <= field_x + field_w + 1e-3);
+            assert!(
+                strip.y >= field_y + field_h,
+                "the strip rides over the field"
+            );
+            assert!(strip.bottom() <= region.bottom() && strip.right() <= region.right());
+
+            // And all three sections are in it, at both sizes.
+            let mut p = Painter::new();
+            let world = World::new(sim::Rng::from_seed(3), None);
+            draw_chrome(
+                &mut p,
+                region,
+                Some(&world),
+                7,
+                &crate::ui::Controls::default(),
+                true,
+            );
+            let texts: Vec<&str> = p.text.iter().map(|item| item.content.as_str()).collect();
+            for section in ["01 / PERCEPTION", "03 / MOTOR REQUESTS"] {
+                assert!(
+                    texts.contains(&section),
+                    "{section} is missing at {width}×{height}"
+                );
+            }
+            assert!(
+                texts.iter().any(|text| text.starts_with("02 /")),
+                "the Threat Telemetry section is missing at {width}×{height}"
+            );
+            for meter in ["PROXIMITY", "CLOSING - / + AWAY", "PRESSURE"] {
+                assert!(
+                    texts.contains(&meter),
+                    "the {meter} meter is missing at {width}×{height}"
+                );
+            }
         }
     }
 }

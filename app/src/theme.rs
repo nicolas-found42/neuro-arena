@@ -84,6 +84,11 @@ pub mod color {
     // ---- charts and the Network -----------------------------------------
     pub const BEST: Rgba = ACCENT;
     pub const MEAN: Rgba = ENERGY;
+    /// The Chart's spread band: the Population's median-to-p90 ribbon, drawn
+    /// behind the mean. A deep cyan off the same family as ACCENT, at a wash's
+    /// strength rather than a reading's, so a range can stand under the subject
+    /// without competing with it or passing for one.
+    pub const BAND: Rgba = Rgba::rgba(0.161, 0.472, 0.546, 0.22);
     pub const NODE_INPUT: Rgba = Rgba::rgb(0.443, 0.678, 0.592);
     pub const NODE_HIDDEN: Rgba = Rgba::rgb(0.839, 0.784, 0.478);
     pub const NODE_OUTPUT: Rgba = Rgba::rgb(0.898, 0.545, 0.412);
@@ -137,9 +142,15 @@ pub mod font {
     pub const HEADING: f32 = 11.0;
     /// The dominant HUD numbers.
     pub const BIG: f32 = 20.0;
+    /// The run's headline numerals: the Generation and the Shaped Fitness at
+    /// the top of the HUD, the largest type in the application.
+    pub const HEADLINE: f32 = 28.0;
     pub const SMALL: f32 = 10.0;
     /// Captions under an instrument, and axis labels.
     pub const MICRO: f32 = 9.0;
+    /// The fine print: legends and labels inside an instrument too crowded for
+    /// MICRO, where a name has to stand beside a reading rather than under it.
+    pub const FINE: f32 = 8.0;
     pub const LINE_STEP: f32 = 15.0;
 }
 
@@ -186,6 +197,11 @@ mod tests {
             color::BUTTON_ON,
             color::ASTEROID_LIT,
             color::ASTEROID_RIM,
+            // The Chart's own inks: the mean's line and the band behind it are
+            // both authored at or below white, like everything else the
+            // interface prints.
+            color::BEST,
+            color::BAND,
         ] {
             for channel in [color.r, color.g, color.b] {
                 assert!((0.0..=1.0).contains(&channel), "{color:?} leaves the gamut");

@@ -81,15 +81,15 @@ fn main() {
     );
     let mut painter = Painter::new();
     painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
-    scene::draw_arena(
-        &mut painter,
-        &world,
-        observatory::arena_view(layout.arena, dpr),
-        true,
-        true,
-    );
-    trail.draw(&mut painter, observatory::arena_view(layout.arena, dpr));
-    effects.draw(&mut painter, observatory::arena_view(layout.arena, dpr));
+    // As in the app: the frame draws with the offset the effects pass
+    // observed, while the placement rect stays still.
+    let view = neuroarena_app::scene::ArenaView {
+        tremor: effects.shake(),
+        ..observatory::arena_view(layout.arena, dpr)
+    };
+    scene::draw_arena(&mut painter, &world, view, true, true);
+    trail.draw(&mut painter, view);
+    effects.draw(&mut painter, view);
     painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
     let info = panels::HudInfo {
         seed: 2026,

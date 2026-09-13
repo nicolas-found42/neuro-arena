@@ -1,0 +1,223 @@
+// Evidence harness for the state-*/chart-*/arena-min/arena-wide captures in this
+// directory (2026-09 audit baseline, HEAD cf8e097). It is a copy of
+// app/examples/tmp_audit_probe.rs, which was removed after the captures so the
+// working tree stayed clean. To reproduce: copy this file back to
+// app/examples/tmp_audit_probe.rs, then
+//   cargo run --release -p neuroarena-app --example tmp_audit_probe -- \
+//     out.png <width> <height> <dpr> <completed_generations> <state>
+// with state in none|hover|focus|pressed|editing|watching|banner|dense.
+//
+// Two things it does that visual_probe does not: it resets the Painter
+// transform after scene::draw_arena (the shell does this in
+// appstate::build_frame), and it drives the interaction-state inputs to
+// panels::draw_controls plus the focus ring and pressed wash that build_frame
+// draws.
+
+use neuroarena_app::{
+    gpu::{Gpu, Offscreen},
+    observatory,
+    painter::{Painter, Transform},
+    panels,
+    renderer::Renderer,
+    scene, theme, ui,
+};
+use sim::{Competence, Run, RunOptions};
+use std::time::Instant;
+
+fn main() {
+    let args: Vec<_> = std::env::args().collect();
+    let path = args.get(1).map(String::as_str).unwrap_or("/tmp/audit.png");
+    let width: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1440);
+    let height: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(900);
+    let dpr: f32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let completed: usize = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let state = args.get(6).map(String::as_str).unwrap_or("none");
+
+    let mut run = Run::with_options(2026, RunOptions::new(100, 1));
+    let mut history_wall = 0.0_f64;
+    for _ in 0..completed {
+        let started = Instant::now();
+        let g = run.begin_generation();
+        run.complete_generation(g.evaluate_all(1));
+        history_wall += started.elapsed().as_secs_f64();
+    }
+    let generation = run.begin_generation();
+    let mut world = generation.world(0);
+    let mut inspected_genome = run.population().genomes[0].clone();
+    if state == "dense" {
+        let mut rng = sim::Rng::from_seed(44);
+        let mut tracker = sim::InnovationTracker::from_genome(&inspected_genome);
+        for _ in 0..48 {
+            inspected_genome.mutate_add_node(&mut rng, &mut tracker);
+        }
+        world = sim::World::new(
+            sim::Rng::from_seed(2026),
+            Some(sim::Network::from_genome(&inspected_genome)),
+        );
+    }
+    let mut trail = observatory::Trail::default();
+    let mut effects = neuroarena_app::effects::Effects::default();
+    for _ in 0..180 {
+        if world.done {
+            break;
+        }
+        world.step_fixed();
+        trail.observe((run.generation(), 0), &world, true);
+        effects.observe((run.generation(), 0), &world, true);
+    }
+
+    let gpu = Gpu::new(
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle()),
+        None,
+    )
+    .unwrap();
+    let target = Offscreen::new(&gpu, width, height, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let mut renderer = Renderer::new(&gpu, target.format);
+    let layout = ui::Layout::new(width as f32 / dpr, height as f32 / dpr);
+    let arena = observatory::arena_view(layout.arena, dpr).rect();
+    renderer.set_frame(
+        &gpu,
+        neuroarena_app::renderer::Frame {
+            viewport: [width as f32, height as f32],
+            arena: [arena.0, arena.1, arena.2, arena.3],
+        },
+    );
+    let mut painter = Painter::new();
+    painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
+    let view = observatory::arena_view(layout.arena, dpr);
+    scene::draw_arena(&mut painter, &world, view, true, true);
+    trail.draw(&mut painter, view);
+    effects.draw(&mut painter, view);
+    // draw_arena leaves the arena transform in the painter; the shell resets it
+    // before the 1:1 chrome (appstate::build_frame does the same).
+    painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
+    let watching = state == "watching";
+    let controls = ui::Controls {
+        paused: true,
+        rays: true,
+        speed: 1.0,
+        seed_text: "2026".into(),
+        seed_editing: state == "editing",
+        watching,
+        ..Default::default()
+    };
+    let hot = match state {
+        "hover" => Some(ui::Hit::Save),
+        _ => None,
+    };
+    let info = panels::HudInfo {
+        seed: 2026,
+        generation: run.generation(),
+        member: 0,
+        population: 100,
+        episode_time: world.time,
+        wave: world.wave,
+        fitness: world.agent.fitness,
+        competence: Competence {
+            alive_time: world.agent.stats.alive_time,
+            wave: world.wave,
+            asteroids: world.agent.stats.asteroid_points,
+        },
+        gate: run.gate(),
+        species: run.population().species.len(),
+        speed: 1.0,
+        measured_rate: 1234.5,
+        watching,
+    };
+    observatory::draw_chrome(
+        &mut painter,
+        layout.arena,
+        Some(&world),
+        2026,
+        &controls,
+        true,
+    );
+    panels::draw_hud(&mut painter, layout.hud, &info);
+    panels::draw_chart(&mut painter, layout.chart, run.history());
+    panels::draw_network(
+        &mut painter,
+        layout.network,
+        &inspected_genome,
+        world.agent.network().unwrap(),
+    );
+    panels::draw_controls(&mut painter, &layout, &controls, hot);
+    if state == "focus" {
+        // Replicates appstate::draw_focus_ring over ui::focus_ring — the ring
+        // sits outside the control face (offset 2.0, weight 1.5).
+        let r = ui::focus_ring(layout.control_rect(ui::Hit::Pause));
+        let ink = theme::color::ACCENT.alpha(0.8);
+        let c = [[r.x, r.y], [r.right(), r.y], [r.right(), r.bottom()], [r.x, r.bottom()]];
+        for (f, t) in [(0, 1), (1, 2), (2, 3), (3, 0)] {
+            painter.stroke(c[f], c[t], ui::FOCUS_RING_WEIGHT, ink);
+        }
+    }
+    if state == "pressed" {
+        let r = layout.control_rect(ui::Hit::Load);
+        painter.rect(r.x, r.y, r.w, r.h, theme::color::ACCENT.alpha(0.12));
+    }
+    if state == "banner" {
+        panels::draw_banner(
+            &mut painter,
+            layout.arena,
+            &[(
+                format!(
+                    "Generation {} · best fitness {:.1} · alive {:.1}s · Wave {} · {} Species",
+                    completed.max(1) + 1,
+                    world.agent.fitness,
+                    world.agent.stats.alive_time,
+                    world.wave + 1,
+                    run.population().species.len()
+                ),
+                theme::color::TEXT,
+            )],
+        );
+    }
+    panels::draw_status(
+        &mut painter,
+        layout.status,
+        match state {
+            "watching" => "watching saves/best.json · replaying its Generation",
+            "hover" => "hover: Save under the pointer",
+            "focus" => "focus: Pause owns the ring",
+            "pressed" => "pressed: Load washing accent",
+            "editing" => "editing: seed field live",
+            "banner" => "episode transition banner at full strength",
+            _ => "seed 2026 / audit capture",
+        },
+        false,
+    );
+    let mut times = Vec::new();
+    for i in 0..130 {
+        let start = Instant::now();
+        renderer.render(&gpu, target.view(), &painter);
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        if i >= 10 {
+            times.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    times.sort_by(f64::total_cmp);
+    println!(
+        "state={} size={}x{} generations={} gen_wall={:.2}s step={} triangles={} glyphs={} render_ms_p50={:.3} p95={:.3}",
+        state,
+        width,
+        height,
+        run.generation(),
+        history_wall,
+        (world.time / sim::DT).round() as usize,
+        painter.triangles.len() / 3,
+        renderer.last_glyphs,
+        times[60],
+        times[114]
+    );
+    let file = std::fs::File::create(path).unwrap();
+    let mut encoder = png::Encoder::new(file, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&target.read_rgba(&gpu))
+        .unwrap();
+}

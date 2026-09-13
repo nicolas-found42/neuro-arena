@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
@@ -74,6 +74,11 @@ struct App {
     painter: Painter,
     trail: Trail,
     effects: crate::effects::Effects,
+    /// The Arena's displacement, read from the effects pass after it observes
+    /// and carried on the view the next frame draws with. A held frame keeps
+    /// the offset it was given, which is what makes a paused frame
+    /// pixel-identical.
+    arena_tremor: [f32; 2],
     trails: bool,
 
     seed: u32,
@@ -104,6 +109,10 @@ struct App {
     rate_window: f64,
     rate_steps: u64,
     last_frame: Instant,
+    /// Set by every event that changes what the window would show, cleared once
+    /// a frame has been drawn. Paused and otherwise idle this is the only thing
+    /// besides a banner still fading that earns a frame: the last one stands.
+    redraw_pending: bool,
     /// True only once the surface has been configured for presentation. macOS
     /// can ask the window to draw before setup finishes, and a draw into an
     /// unconfigured surface is a validation error that aborts the process
@@ -129,6 +138,7 @@ impl App {
             painter: Painter::new(),
             trail: Trail::default(),
             effects: crate::effects::Effects::default(),
+            arena_tremor: [0.0, 0.0],
             trails: true,
             seed,
             run: Run::with_options(seed, RunOptions::new(config::neat::POP_SIZE, workers)),
@@ -154,6 +164,7 @@ impl App {
             rate_window: 0.0,
             rate_steps: 0,
             last_frame: Instant::now(),
+            redraw_pending: false,
             ready: false,
         }
     }
@@ -188,7 +199,8 @@ impl App {
     fn reset_progress(&mut self) {
         self.trail.clear();
         self.effects.clear();
-        self.generation = None;
+        // The field the next frame draws is the new run's, not the dead one's.
+        self.arena_tremor = [0.0, 0.0];
         self.watched = None;
         self.worker = None;
         self.outcomes.clear();
@@ -421,6 +433,52 @@ impl App {
         }
     }
 
+    // ---- the loop --------------------------------------------------------
+
+    /// Does the loop owe the window another frame? While the run is moving,
+    /// always: the Arena is animating. While it is paused only two things earn
+    /// a frame — a banner with moments left to fade, and an event that landed
+    /// since the last frame was drawn. Otherwise the frame already on the
+    /// surface is the right one and stands.
+    fn wants_redraw(&self) -> bool {
+        !self.controls.paused || self.banner.is_some() || self.redraw_pending
+    }
+
+    /// Ask for one frame now, rather than wait for the next turn of the loop.
+    /// Events call this so that a paused window answers a click, a key or a
+    /// resize in the same turn; `about_to_wait` asks again for as long as the
+    /// frame the window shows is still out of date.
+    fn request_frame(&mut self) {
+        self.redraw_pending = true;
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    /// Take a new physical size for the surface and reconfigure it with it, so
+    /// the next frame covers the whole window.
+    fn set_surface_size(&mut self, width: u32, height: u32) {
+        let Some(config) = self.config.as_mut() else {
+            return;
+        };
+        config.width = width.max(1);
+        config.height = height.max(1);
+        if let (Some(surface), Some(gpu)) = (self.surface.as_ref(), self.gpu.as_ref()) {
+            surface.configure(&gpu.device, config);
+        }
+    }
+
+    /// The window's scale factor changed — a move to another display, usually.
+    /// The physical size the window reports now is the one the surface takes,
+    /// and a frame is asked for: the layout divides by the live factor, so that
+    /// one frame picks up both the new size and the new dpr.
+    fn on_scale_factor(&mut self, size: Option<PhysicalSize<u32>>) {
+        if let Some(size) = size {
+            self.set_surface_size(size.width, size.height);
+        }
+        self.request_frame();
+    }
+
     // ---- input -----------------------------------------------------------
 
     fn layout(&self) -> Option<ui::Layout> {
@@ -574,9 +632,19 @@ impl App {
                 }
             }
             Key::Character(text) => {
+                // A digit belongs to the seed field, and only when the field is
+                // where the eye is: being edited, focused by Tab or a click, or
+                // under the cursor. Anywhere else a digit is not a command and
+                // is dropped rather than opening the field behind the user.
+                let field = self.controls.seed_editing
+                    || self.focus == Some(ui::Hit::SeedField)
+                    || self.hot == Some(ui::Hit::SeedField);
                 let mut typed = false;
                 for character in text.chars() {
                     if character.is_ascii_digit() {
+                        if !field {
+                            continue;
+                        }
                         self.controls.seed_editing = true;
                         self.controls.push_seed_char(character);
                         typed = true;
@@ -585,11 +653,17 @@ impl App {
                 if typed {
                     return;
                 }
+                // While the field is being edited the field has the keyboard:
+                // every key belongs to it, so no letter is also a command.
+                if self.controls.seed_editing {
+                    return;
+                }
                 match text.to_lowercase().as_str() {
                     "m" => {
                         self.trails = !self.trails;
                         self.trail.clear();
                         self.effects.clear();
+                        self.arena_tremor = [0.0, 0.0];
                     }
                     "r" => self.controls.rays = !self.controls.rays,
                     "s" => self.save_best(),
@@ -627,7 +701,12 @@ impl App {
         // sidebar leaves; the panels stay at 1:1 and stay legible (ADR 0006).
         let arena_view = observatory::arena_view(layout.arena, dpr);
         if let Some(world) = self.watched.as_ref() {
-            let view = arena_view;
+            // The tremor the frame draws with is the one the frame before it
+            // observed; the offset is on the view, not on global state.
+            let view = crate::scene::ArenaView {
+                tremor: self.arena_tremor,
+                ..arena_view
+            };
             self.trail.observe(
                 (self.run.generation(), self.watched_member),
                 world,
@@ -640,6 +719,7 @@ impl App {
                 world,
                 self.trails && self.controls.speed <= 16.0,
             );
+            self.arena_tremor = self.effects.shake();
             self.effects.draw(painter, view);
         }
         painter.set_transform(Transform::new(dpr, [0.0, 0.0]));
@@ -690,8 +770,7 @@ impl App {
         }
         panels::draw_controls(painter, &layout, &self.controls, self.hot);
         if let Some(hit) = self.focus {
-            let r = layout.control_rect(hit).inset(2.0);
-            painter.rect_outline(r.x, r.y, r.w, r.h, theme::color::ACCENT.alpha(0.8));
+            draw_focus_ring(painter, ui::focus_ring(layout.control_rect(hit)));
         }
         if let Some(hit) = self.pressed {
             let r = layout.control_rect(hit);
@@ -722,6 +801,9 @@ impl App {
     }
 
     fn draw(&mut self) {
+        // The frame the loop owed is being drawn now, whether or not the
+        // surface is ready to take it.
+        self.redraw_pending = false;
         if !self.ready {
             return;
         }
@@ -786,6 +868,23 @@ impl App {
         }
         self.advance(dt);
         self.draw();
+    }
+}
+
+/// Stroke the focus ring around a control: four segments along the ring rect,
+/// submitted after the panels so it reads over whatever the control's own face
+/// is doing — hover tint, toggled fill and all.
+fn draw_focus_ring(painter: &mut Painter, ring: ui::Rect) {
+    let ink = theme::color::ACCENT.alpha(0.8);
+    let weight = ui::FOCUS_RING_WEIGHT;
+    let corners = [
+        [ring.x, ring.y],
+        [ring.right(), ring.y],
+        [ring.right(), ring.bottom()],
+        [ring.x, ring.bottom()],
+    ];
+    for (from, to) in [(0, 1), (1, 2), (2, 3), (3, 0)] {
+        painter.stroke(corners[from], corners[to], weight, ink);
     }
 }
 
@@ -897,17 +996,19 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let (Some(surface), Some(config), Some(gpu)) = (
-                    self.surface.as_ref(),
-                    self.config.as_mut(),
-                    self.gpu.as_ref(),
-                ) {
-                    config.width = size.width.max(1);
-                    config.height = size.height.max(1);
-                    surface.configure(&gpu.device, config);
-                }
+                self.set_surface_size(size.width, size.height);
+                self.request_frame();
             }
-            WindowEvent::CursorMoved { position, .. } => self.on_move(position),
+            WindowEvent::ScaleFactorChanged { .. } => {
+                // The OS resizes the window along with the factor, so whatever
+                // it reports as the physical size now is authoritative.
+                let size = self.window.as_ref().map(|window| window.inner_size());
+                self.on_scale_factor(size);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.on_move(position);
+                self.request_frame();
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Left {
                     match state {
@@ -917,9 +1018,15 @@ impl ApplicationHandler for App {
                             self.pressed = None;
                         }
                     }
+                    self.request_frame();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // A release changes nothing the frame draws, and the window
+                // does not need waking for it.
+                if event.state == ElementState::Pressed {
+                    self.request_frame();
+                }
                 self.on_key(&event.logical_key, event.state)
             }
             WindowEvent::RedrawRequested => self.tick(),
@@ -928,8 +1035,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
+        if self.wants_redraw() {
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
         }
     }
 }
@@ -940,4 +1049,281 @@ fn report_startup_failure(window: &Window, event_loop: &ActiveEventLoop, error: 
     window.set_title(&format!("NeuroArena — {error}"));
     eprintln!("NeuroArena cannot draw: {error}");
     event_loop.exit();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::layout::SIDEBAR_WIDTH;
+
+    /// An app with nothing but its own state: no window and no GPU, which is
+    /// all the loop's questions and the input path need answered.
+    fn app() -> App {
+        App::new()
+    }
+
+    fn character(text: &str) -> Key {
+        Key::Character(text.into())
+    }
+
+    fn press(app: &mut App, key: Key) {
+        app.on_key(&key, ElementState::Pressed);
+    }
+
+    /// A surface configuration as `resumed` builds one — enough for `layout`
+    /// to read a window size from, without a window behind it.
+    fn configuration(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
+        wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+        }
+    }
+
+    fn overlaps(a: ui::Rect, b: ui::Rect) -> bool {
+        a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+    }
+
+    #[test]
+    fn the_loop_owes_a_frame_only_what_can_change() {
+        let mut app = app();
+
+        // Running: the Arena is animating, so every turn asks for a frame.
+        assert!(app.wants_redraw(), "a running run always wants a frame");
+
+        // Paused with nothing new: the frame already on the surface stands.
+        app.controls.paused = true;
+        assert!(!app.wants_redraw(), "a paused, idle loop draws nothing");
+
+        // A banner still fading has to be seen out.
+        app.banner = Some((
+            "Generation 4 · best fitness 12.0".to_string(),
+            BANNER_SECONDS,
+        ));
+        assert!(app.wants_redraw(), "a fading banner earns frames");
+        app.banner = None;
+
+        // An event that lands while paused earns exactly one frame: the event
+        // asks for it, and drawing that frame settles it.
+        app.request_frame();
+        assert!(app.wants_redraw(), "a pending event earns a frame");
+        app.draw();
+        assert!(!app.wants_redraw(), "the pending frame has been drawn");
+
+        // Running again is continuous.
+        app.controls.paused = false;
+        assert!(app.wants_redraw(), "resuming asks for frames again");
+    }
+
+    #[test]
+    fn space_pauses_with_one_frame_to_show_for_it() {
+        let mut app = app();
+        press(&mut app, Key::Named(NamedKey::Space));
+        assert!(app.controls.paused);
+        // The key that paused is what asks for the frame showing the PAUSED
+        // lamp; once it is drawn the loop goes quiet and the lamp holds.
+        app.request_frame();
+        assert!(app.wants_redraw());
+        app.draw();
+        assert!(!app.wants_redraw());
+
+        press(&mut app, Key::Named(NamedKey::Space));
+        assert!(!app.controls.paused);
+        assert!(app.wants_redraw(), "resuming is continuous again");
+    }
+
+    #[test]
+    fn the_seed_field_takes_the_keyboard_only_where_it_is() {
+        let mut app = app();
+        app.controls.seed_text = "2026".to_string();
+        app.controls.seed_editing = false;
+        app.focus = None;
+        app.hot = None;
+
+        // Nowhere near the field: a digit is not a command, and does not open
+        // the field behind the user's back.
+        press(&mut app, character("7"));
+        assert_eq!(app.controls.seed_text, "2026");
+        assert!(!app.controls.seed_editing);
+
+        // Hovered: a digit enters the field and is typed into it.
+        app.hot = Some(ui::Hit::SeedField);
+        press(&mut app, character("7"));
+        assert!(app.controls.seed_editing);
+        assert_eq!(app.controls.seed_text, "20267");
+
+        // Editing: digits land, and no letter is also a command.
+        press(&mut app, character("8"));
+        assert_eq!(app.controls.seed_text, "202678");
+        let rays = app.controls.rays;
+        press(&mut app, character("r"));
+        assert_eq!(
+            app.controls.rays, rays,
+            "'r' is text while the field is edited"
+        );
+        assert_eq!(app.controls.seed_text, "202678");
+
+        // The pointer leaving does not end the edit: the caret keeps the keys.
+        app.hot = None;
+        press(&mut app, character("9"));
+        assert_eq!(app.controls.seed_text, "2026789");
+
+        // Escape leaves the field with what was typed; commands return.
+        press(&mut app, Key::Named(NamedKey::Escape));
+        assert!(!app.controls.seed_editing);
+        assert_eq!(app.controls.seed_text, "2026789", "the digits are kept");
+        press(&mut app, character("r"));
+        assert_ne!(
+            app.controls.rays, rays,
+            "'r' toggles Rays once the field is left"
+        );
+        press(&mut app, character("m"));
+        assert!(!app.trails, "'m' toggles Trails too");
+
+        // Tab reaches the field and puts the caret in it.
+        app.focus = None;
+        let mut tabs = 0;
+        while app.focus != Some(ui::Hit::SeedField) && tabs <= ui::FOCUS_ORDER.len() {
+            press(&mut app, Key::Named(NamedKey::Tab));
+            tabs += 1;
+        }
+        assert_eq!(app.focus, Some(ui::Hit::SeedField));
+        assert!(
+            app.controls.seed_editing,
+            "Tab into the field starts editing"
+        );
+
+        // Focused but not editing: a digit re-enters the field.
+        press(&mut app, Key::Named(NamedKey::Escape));
+        assert!(!app.controls.seed_editing);
+        press(&mut app, character("4"));
+        assert!(app.controls.seed_editing);
+        assert_eq!(app.controls.seed_text, "20267894");
+    }
+
+    #[test]
+    fn every_letter_command_survives_the_match_it_lives_in() {
+        // The five letter hotkeys are one match; a refactoring edit has more
+        // than once replaced the whole arm alongside its neighbour. Each is
+        // pinned by its own observable state.
+        let mut app = app();
+        app.controls.seed_editing = false;
+        app.focus = None;
+
+        let rays = app.controls.rays;
+        press(&mut app, character("r"));
+        assert_ne!(app.controls.rays, rays, "'r' toggles Rays");
+
+        let trails = app.trails;
+        press(&mut app, character("m"));
+        assert_ne!(app.trails, trails, "'m' toggles Trails");
+
+        // The pin is "the arm still exists and speaks", not "the IO
+        // succeeded": the observable is the status line, which changes
+        // whether the directory is empty or not. Hermetic by construction —
+        // a fresh run has finished no Generation, so 's' has nothing to write
+        // and touches no disk, and 'l' only reads.
+        let before = app.message.clone();
+        press(&mut app, character("s"));
+        assert_ne!(app.message, before, "'s' reports through the status line");
+
+        // Load reports whether it found a Genome to watch or an empty
+        // directory; Evolve names the Genome it would need, or the one it is
+        // resuming from. Either way the command spoke.
+        let before = app.message.clone();
+        press(&mut app, character("l"));
+        assert_ne!(app.message, before, "'l' reports through the status line");
+
+        let before = app.message.clone();
+        press(&mut app, character("e"));
+        assert_ne!(app.message, before, "'e' reports through the status line");
+    }
+
+    #[test]
+    fn the_focus_ring_clears_the_control_it_belongs_to() {
+        // The stroke's band straddles the ring line by half its weight.
+        let band = ui::FOCUS_RING_WEIGHT * 0.5;
+        for (width, height) in [(900.0, 560.0), (1280.0, 800.0), (3840.0, 2160.0)] {
+            let layout = ui::Layout::new(width, height);
+            for hit in ui::FOCUS_ORDER {
+                let face = layout.control_rect(hit);
+                let ring = ui::focus_ring(face);
+                assert!(
+                    ring.x < face.x && ring.y < face.y,
+                    "{hit:?} ring is not outside its face in {width}×{height}: {face:?} {ring:?}"
+                );
+                assert!(
+                    ring.right() > face.right() && ring.bottom() > face.bottom(),
+                    "{hit:?} ring is not outside its face in {width}×{height}: {face:?} {ring:?}"
+                );
+                // The whole band clears the face, so a control filled edge to
+                // edge — a toggled `On` key — can never cover the ring.
+                assert!(
+                    ring.x + band <= face.x
+                        && ring.y + band <= face.y
+                        && ring.right() - band >= face.right()
+                        && ring.bottom() - band >= face.bottom(),
+                    "{hit:?} ring band touches its face in {width}×{height}: {face:?} {ring:?}"
+                );
+                // And it stays inside the panel the control lives in.
+                assert!(
+                    ring.x >= layout.controls.x
+                        && ring.y >= layout.controls.y
+                        && ring.right() <= layout.controls.right()
+                        && ring.bottom() <= layout.controls.bottom(),
+                    "{hit:?} ring escapes the controls panel in {width}×{height}: {ring:?}"
+                );
+                // At the natural strip size the ring is narrower than the gap
+                // between cells, so it never lands on a neighbour either.
+                if height >= 900.0 {
+                    for other in ui::FOCUS_ORDER {
+                        let neighbour = layout.control_rect(other);
+                        assert!(
+                            other == hit || !overlaps(ring, neighbour),
+                            "{hit:?} ring lands on {other:?} in {width}×{height}: {ring:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_scale_factor_change_re_lays_out_and_asks_for_a_frame() {
+        let mut app = app();
+        app.config = Some(configuration(800, 600));
+        app.controls.paused = true;
+        assert_eq!(
+            app.layout()
+                .expect("a configured surface has a layout")
+                .sidebar
+                .x,
+            800.0 - SIDEBAR_WIDTH
+        );
+        assert!(!app.wants_redraw());
+
+        // The window moved to a display with twice the dpr: the OS resizes it
+        // along with the factor, and the layout — which divides by the live
+        // factor — has to be recomputed from the size that comes with the
+        // event.
+        app.on_scale_factor(Some(PhysicalSize::new(1600, 1200)));
+        assert_eq!(app.config.as_ref().expect("configured").width, 1600);
+        assert_eq!(
+            app.layout().expect("still configured").sidebar.x,
+            1600.0 - SIDEBAR_WIDTH,
+            "the panels moved to the new window width"
+        );
+        assert!(
+            app.wants_redraw(),
+            "the change asks for a frame, paused or not"
+        );
+        app.draw();
+        assert!(!app.wants_redraw());
+    }
 }
